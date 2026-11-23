@@ -1,0 +1,70 @@
+name: dragonfly
+
+x-backend: &backend
+  build: ./backend
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://dragonfly:dragonfly@postgres:5432/dragonfly
+    REDIS_URL: redis://redis:6379/0
+    ARTIFACT_DIR: /data/artifacts
+  volumes:
+    - artifacts:/data/artifacts
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  api:
+    <<: *backend
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 10
+
+  worker:
+    <<: *backend
+    # Runs discovery + browser execution. --pool=solo: one browser job at a time per worker (scale with replicas).
+    command: celery -A app.worker worker --loglevel=info --pool=solo
+    depends_on:
+      api: { condition: service_healthy }  # api runs migrations first
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g }
+
+  web:
+    build: ./frontend
+    environment:
+      API_URL: http://api:8000
+    ports: ["5173:5173"]
+    depends_on: [api]
+
+  # Deliberately buggy demo target — kept separate from Dragonfly (§64).
+  demo-app:
+    build: ./demo-app
+    ports: ["8001:8001"]
+    environment:
+      DEMO_FIXED: ${DEMO_FIXED:-0}
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: dragonfly
+      POSTGRES_PASSWORD: dragonfly
+      POSTGRES_DB: dragonfly
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dragonfly"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  artifacts:

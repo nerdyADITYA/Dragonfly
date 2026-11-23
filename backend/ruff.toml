@@ -1,0 +1,7 @@
+line-length = 120
+target-version = "py313"
+extend-exclude = ["alembic/versions"]
+
+[lint]
+# B008: FastAPI's Depends() in defaults is idiomatic. BLE001: broad excepts are deliberate isolation points (commented).
+ignore = ["B008", "BLE001"]

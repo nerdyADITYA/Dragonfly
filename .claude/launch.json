@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo-app",
+      "runtimeExecutable": "backend/.venv/Scripts/uvicorn.exe",
+      "runtimeArgs": ["app:app", "--app-dir", "demo-app", "--port", "8001"],
+      "port": 8001
+    },
+    {
+      "name": "api-local",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd backend && set CELERY_EAGER=1&& set DATABASE_URL=sqlite:///./dev.db&& .venv\\Scripts\\alembic upgrade head && .venv\\Scripts\\uvicorn app.main:app --port 8000"],
+      "port": 8000
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "port": 5173
+    }
+  ]
+}
