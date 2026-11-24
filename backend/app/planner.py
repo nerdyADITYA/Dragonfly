@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app import ai
-from app.models import DiscoveredPage, Environment, ScanRun, TestCase
+from app.models import DiscoveredPage, Environment, ScanRun, TestCase, TestCaseVersion
 from app.schemas import Action, ScanPolicy, Target, TestCaseDef, TestPlan
 from app.validator import fingerprint, validate
 
@@ -139,12 +139,48 @@ def generate_tests(db: Session, scan: ScanRun, goals: str = "", use_ai: bool = T
             duplicates += 1
             continue
         existing.add(fp)
-        errors = validate(t, env.base_url, policy)
-        blocked += bool(errors)
-        db.add(TestCase(project_id=scan.project_id, scan_run_id=scan.id, key=t.key[:60], title=t.title[:300],
-                        category=t.category, priority=t.priority, definition_json=t.model_dump(), fingerprint=fp,
-                        status="blocked" if errors else "draft", validation_errors_json=errors, generated_by=source))
+        tc = TestCase(project_id=scan.project_id, scan_run_id=scan.id, generated_by=source, version=0)
+        db.add(tc)
+        set_definition(db, tc, t, env.base_url, policy, f"generated:{source}")
+        blocked += tc.status == "blocked"
         created += 1
     db.commit()
     return {"generated_by": source, "candidates": len(candidates), "created": created,
             "duplicates_skipped": duplicates, "blocked_by_validator": blocked, "note": note}
+
+
+# ---------------- versioning, regeneration ----------------
+
+def set_definition(db: Session, tc: TestCase, d: TestCaseDef, base_url: str, policy: ScanPolicy, source: str,
+                   actor: str = "system") -> None:
+    """The only way a test definition changes: validate, bump version, record history, back to review."""
+    errors = validate(d, base_url, policy)
+    tc.definition_json, tc.key, tc.title = d.model_dump(), d.key[:60], d.title[:300]
+    tc.category, tc.priority, tc.fingerprint = d.category, d.priority, fingerprint(d)
+    tc.version = (tc.version or 0) + 1
+    tc.validation_errors_json, tc.status = errors, "blocked" if errors else "draft"
+    db.flush()
+    db.add(TestCaseVersion(test_case_id=tc.id, version=tc.version, definition_json=tc.definition_json,
+                           source=source[:80], created_by=actor))
+
+
+REGEN_PROMPT = SYSTEM_PROMPT + """
+
+You are rewriting ONE existing test case. Keep its intent unless the reviewer's instructions say otherwise,
+fix whatever the reviewer or the validation errors point out, and keep the same key."""
+
+
+def regenerate_test(db: Session, tc: TestCase, instructions: str) -> None:
+    if not ai.enabled():
+        raise ValueError("Regenerating a test needs the AI planner (set ANTHROPIC_API_KEY)")
+    scan = db.get(ScanRun, tc.scan_run_id) if tc.scan_run_id else None
+    if not scan:
+        raise ValueError("test has no source scan to regenerate from")
+    env = db.get(Environment, scan.environment_id)
+    user = (f"Discovery data:\n{json.dumps(discovery_summary(db, scan), ensure_ascii=False)}\n\n"
+            f"Current test:\n{json.dumps(tc.definition_json, ensure_ascii=False)}\n\n"
+            f"Validation errors: {tc.validation_errors_json or 'none'}\n"
+            f"Reviewer instructions: {instructions or '(none — improve clarity and assertions)'}")
+    d = ai.structured(REGEN_PROMPT, user, TestCaseDef)
+    set_definition(db, tc, d, env.base_url, ScanPolicy(**env.scan_policy), f"regenerated:{ai.model_tag(PROMPT_VERSION)}",
+                   actor="user")

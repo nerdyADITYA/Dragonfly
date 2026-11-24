@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import findings, storage
 from app.browser import isolated_page, screenshot
+from app.events import publish
 from app.models import Environment, ExecutionStep, Finding, TestCase, TestExecution, TestRun
 from app.schemas import Action, ScanPolicy, TestCaseDef
 from app.scope import ScopeError, check_url
@@ -127,6 +128,7 @@ def execute(db: Session, run: TestRun, tc: TestCase, env: Environment, attempt: 
                        started_at=datetime.now(UTC))
     db.add(ex)
     db.commit()
+    publish(run.project_id, "test_execution.started", run_id=run.id, execution_id=ex.id, title=tc.title)
 
     # Re-validate at run time: policy may have changed since approval.
     if errors := validate(test, env.base_url, policy):
@@ -234,6 +236,7 @@ def run_tests(db: Session, run_id, test_case_ids: list) -> None:
     env = db.get(Environment, run.environment_id)
     run.status, run.started_at = "running", datetime.now(UTC)
     db.commit()
+    publish(run.project_id, "test_run.started", run_id=run.id)
     retest_tc = original_def = None
     if run.retest_finding_id:  # retest replays the exact test version that detected the defect (§16.4)
         f = db.get(Finding, run.retest_finding_id)
@@ -259,7 +262,9 @@ def run_tests(db: Session, run_id, test_case_ids: list) -> None:
                 db.rollback()
                 logging.getLogger(__name__).exception("recording finding failed for execution %s", ex.id)
         counts[status] = counts.get(status, 0) + 1
+        publish(run.project_id, "test_execution.completed", run_id=run.id, test_case_id=tc_id, status=status)
     run.summary_json = {"counts": counts, "total": len(test_case_ids)}
     run.status = "cancelled" if run.cancel_requested else "completed"
     run.completed_at = datetime.now(UTC)
     db.commit()
+    publish(run.project_id, "test_run.completed", run_id=run.id, finding_id=run.retest_finding_id)

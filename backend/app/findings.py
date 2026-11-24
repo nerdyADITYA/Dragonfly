@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import ai
+from app.events import publish
 from app.models import (
     FINDING_STATUSES,
     OPEN_FINDING_STATUSES,
@@ -187,6 +188,7 @@ def record(db: Session, run: TestRun, ex: TestExecution) -> Finding | None:
             msg += "; reopened because it had been marked fixed/verified"
         event(db, f, "redetected", msg, execution_id=str(ex.id), run_id=str(run.id))
         db.commit()
+        publish(f.project_id, "finding.updated", finding_id=f.id, status=f.status)
         return f
 
     defn = ex.definition_snapshot
@@ -203,6 +205,7 @@ def record(db: Session, run: TestRun, ex: TestExecution) -> Finding | None:
     f.ai_analysis_json = analyze(tc, facts, ex)
     event(db, f, "detected", f"Detected by {tc.key} ({ex.failure_type})", execution_id=str(ex.id), run_id=str(run.id))
     db.commit()
+    publish(f.project_id, "finding.created", finding_id=f.id, severity=f.severity)
     return f
 
 
@@ -222,6 +225,7 @@ def _resolve_retest(db: Session, f: Finding, ex: TestExecution) -> Finding:
     else:
         event(db, f, "retest", f"Retest was {ex.status}; not treated as a fix. Needs human review.", **ref)
     db.commit()
+    publish(f.project_id, "retest.completed", finding_id=f.id, result=ex.status, status=f.status)
     return f
 
 

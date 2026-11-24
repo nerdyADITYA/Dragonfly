@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ACTIVE, api, artifactUrl, pollWhileActive } from '../api.js'
+import { ACTIVE, api, artifactUrl, pollWhileActive, useLiveEvents } from '../api.js'
+import AppMap from './AppMap.jsx'
 import { Badge, Button, Card, Empty, ErrorBox, Loading, fmt } from '../ui.jsx'
 
 function PageRow({ p }) {
@@ -44,18 +45,28 @@ export default function Scan() {
   const qc = useQueryClient()
   const scan = useQuery({ queryKey: ['scan', id], queryFn: () => api(`/discovery/${id}`), refetchInterval: pollWhileActive })
   const active = ACTIVE.has(scan.data?.status)
-  const pages = useQuery({ queryKey: ['pages', id], queryFn: () => api(`/discovery/${id}/pages`), refetchInterval: active ? 2000 : false })
-  const logs = useQuery({ queryKey: ['scanlogs', id], queryFn: () => api(`/discovery/${id}/logs`), refetchInterval: active ? 2000 : false })
+  const pages = useQuery({ queryKey: ['pages', id], queryFn: () => api(`/discovery/${id}/pages`), refetchInterval: active ? 5000 : false })
+  const logs = useQuery({ queryKey: ['scanlogs', id], queryFn: () => api(`/discovery/${id}/logs`), refetchInterval: active ? 5000 : false })
   const stop = useMutation({ mutationFn: () => api(`/discovery/${id}/stop`, { method: 'POST' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['scan', id] }) })
+  const live = useLiveEvents(scan.data?.project_id)
 
   if (scan.isLoading) return <Loading />
   if (scan.error) return <ErrorBox error={scan.error} />
   const s = scan.data
   const sum = s.summary_json || {}
+  const report = `/api/v1/scan-runs/${id}/report`
   return (
     <>
       <Link to={`/projects/${s.project_id}`} className="text-sm text-indigo-700">← Project</Link>
-      <Card title={<>Discovery scan <Badge>{s.status}</Badge></>} actions={active && <Button variant="danger" onClick={() => stop.mutate()}>Stop scan</Button>}>
+      <Card title={<>Discovery scan <Badge>{s.status}</Badge></>} actions={active
+        ? <Button variant="danger" onClick={() => stop.mutate()}>Stop scan</Button>
+        : <>
+            <a className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50" href={report} target="_blank" rel="noreferrer">View report</a>
+            <a className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50" href={`${report}?download=true`}>Download HTML</a>
+          </>}>
+        {active && live?.scan_id === id && live.type === 'discovery.page_found' && (
+          <p className="mb-2 text-sm text-blue-800" role="status">Exploring… last found <span className="font-mono">{live.url}</span> ({live.pages} pages so far)</p>
+        )}
         <dl className="grid grid-cols-2 gap-2 text-sm md:grid-cols-6">
           <div><dt className="text-slate-500">Stage</dt><dd>{s.stage}</dd></div>
           <div><dt className="text-slate-500">Pages</dt><dd>{pages.data?.length ?? 0}</dd></div>
@@ -68,6 +79,8 @@ export default function Scan() {
         {s.error_message && <ErrorBox error={s.error_message} />}
         {sum.limitations && <ul className="mt-2 list-disc pl-5 text-xs text-slate-500">{sum.limitations.map((l) => <li key={l}>{l}</li>)}</ul>}
       </Card>
+
+      {pages.data?.length > 0 && <AppMap scanId={id} />}
 
       <Card title="Discovered pages">
         {pages.data?.length === 0 && <Empty>{active ? 'Exploring…' : 'No pages discovered.'}</Empty>}

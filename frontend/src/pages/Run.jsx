@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { ACTIVE, api, pollWhileActive } from '../api.js'
+import { ACTIVE, api, pollWhileActive, useLiveEvents } from '../api.js'
 import { Badge, Button, Card, Empty, ErrorBox, Loading, fmt } from '../ui.jsx'
 
 export default function Run() {
   const { id } = useParams()
   const qc = useQueryClient()
   const run = useQuery({ queryKey: ['run', id], queryFn: () => api(`/test-runs/${id}`), refetchInterval: pollWhileActive })
+  useLiveEvents(run.data?.project_id)
   const cancel = useMutation({ mutationFn: () => api(`/test-runs/${id}/cancel`, { method: 'POST' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['run', id] }) })
   if (run.isLoading) return <Loading />
   if (run.error) return <ErrorBox error={run.error} />

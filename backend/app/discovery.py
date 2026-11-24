@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import storage
 from app.browser import isolated_page, screenshot
+from app.events import publish
 from app.models import (
     ApplicationEdge,
     AuditLog,
@@ -102,6 +103,7 @@ def run_discovery(db: Session, scan_id) -> None:
     base = env.base_url
     scan.status, scan.stage, scan.started_at = "running", "discovery", datetime.now(UTC)
     db.commit()
+    publish(scan.project_id, "scan.started", scan_id=scan.id)
 
     deadline = time.monotonic() + policy.max_duration_seconds
     seen: dict[str, DiscoveredPage] = {}  # route pattern → page
@@ -176,6 +178,7 @@ def run_discovery(db: Session, scan_id) -> None:
                 stats["elements"] += len(data["elements"])
                 stats["forms"] += len(data["forms"])
                 db.commit()
+                publish(scan.project_id, "discovery.page_found", scan_id=scan.id, url=final, pages=stats["pages"])
 
                 if depth >= policy.max_depth:
                     continue
@@ -215,3 +218,4 @@ def run_discovery(db: Session, scan_id) -> None:
     scan.stage = "done"
     scan.completed_at = datetime.now(UTC)
     db.commit()
+    publish(scan.project_id, f"scan.{scan.status}", scan_id=scan.id, pages=stats["pages"])

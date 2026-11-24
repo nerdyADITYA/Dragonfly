@@ -6,5 +6,5 @@ const api = process.env.API_URL || 'http://localhost:8000'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: { host: true, port: 5173, proxy: { '/api': api, '/health': api } },
+  server: { host: true, port: 5173, proxy: { '/api': { target: api, ws: true }, '/health': api } },
 })

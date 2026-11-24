@@ -135,6 +135,20 @@ class TestCase(Timestamps, Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
 
 
+class TestCaseVersion(Base):
+    """Immutable history of every test definition (§24 test_case_versions)."""
+
+    __tablename__ = "test_case_versions"
+    __test__ = False
+    id: Mapped[uuid.UUID] = pk()
+    test_case_id: Mapped[uuid.UUID] = fk("test_cases.id")
+    version: Mapped[int] = mapped_column(Integer)
+    definition_json: Mapped[dict] = mapped_column(JSONType)
+    source: Mapped[str] = mapped_column(String(80))  # generated:<by> | edited | regenerated:<by> | duplicated
+    created_by: Mapped[str] = mapped_column(String(100), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class TestRun(Base):
     __tablename__ = "test_runs"
     __test__ = False

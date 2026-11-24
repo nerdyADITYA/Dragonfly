@@ -384,3 +384,19 @@ class AssignIn(BaseModel):
 
 class RetestIn(BaseModel):
     include_related: bool = Field(False, description="Also re-run approved tests on the same page (§16.3)")
+
+
+# ---------- Test editing, dashboard ----------
+
+
+class RegenerateIn(BaseModel):
+    instructions: str = Field("", max_length=2000, description="What the reviewer wants changed")
+
+
+class TestCaseVersionOut(ORM):
+    __test__ = False
+    version: int
+    definition_json: dict
+    source: str
+    created_by: str
+    created_at: datetime

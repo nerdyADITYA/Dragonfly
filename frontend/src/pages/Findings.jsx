@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api.js'
 import { Badge, Button, Card, Empty, ErrorBox, fmt, inputCls } from '../ui.jsx'
 
@@ -9,11 +9,15 @@ export const STATUSES = ['new', 'triaged', 'assigned', 'in_progress', 'fixed', '
 export const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info']
 
 export function FindingsCard({ projectId }) {
-  const [filter, setFilter] = useState({ status: '', severity: '', open_only: true })
+  const [params] = useSearchParams()  // dashboard tiles deep-link here with ?severity= / ?status=
+  const [filter, setFilter] = useState({ status: params.get('status') || '', severity: params.get('severity') || '',
+    open_only: params.get('open_only') !== 'false' })
+  useEffect(() => { if (location.hash === '#findings') document.getElementById('findings')?.scrollIntoView() }, [])
   const qs = new URLSearchParams(Object.entries(filter).filter(([, v]) => v)).toString()
   const findings = useQuery({ queryKey: ['findings', projectId, qs], queryFn: () => api(`/projects/${projectId}/findings?${qs}`) })
   const sel = 'rounded border border-slate-300 px-2 py-1 text-sm'
   return (
+    <div id="findings">
     <Card title="Findings" actions={
       <>
         <label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={filter.open_only} onChange={(e) => setFilter({ ...filter, open_only: e.target.checked })} /> open only</label>
@@ -37,6 +41,7 @@ export function FindingsCard({ projectId }) {
         ))}
       </ul>
     </Card>
+    </div>
   )
 }
 

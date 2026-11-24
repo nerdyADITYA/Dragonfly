@@ -11,6 +11,19 @@ deterministically with Playwright, and captures evidence. AI plans; tools execut
 > failure becomes a finding (repro steps, screenshots, AI hypothesis) → ticket assigned to a developer →
 > fix → automated retest marks it **verified** (or reopens it).
 
+## What you get in the UI
+
+- **Dashboard**: pass rate (formula shown), executions trend, open findings by severity, regressions,
+  verified fixes, and tests with mixed recent results. Tiles link to the filtered findings list.
+- **Application map**: discovered pages by depth with navigation edges. Red = open findings,
+  amber = no tests, green = tested. Search, highlight filters, click a page for its screenshot.
+- **Scan report**: a self-contained HTML file (configuration, discovery, results, findings with
+  embedded screenshots, limitations). Use *View report* / *Download HTML* on a scan.
+- **Test editor**: form-based steps and locators (raw JSON optional), run one test, duplicate,
+  AI regenerate with reviewer instructions, and full version history. Any edit returns a test to draft.
+- **Live updates**: worker → Redis pub/sub → `/api/v1/ws/projects/{id}` WebSocket. Pages refresh as
+  pages are found and tests finish; polling is only a fallback.
+
 ## Demo storyline (§65)
 
 1. Discover the demo app, generate tests, approve and run them → `Add user: empty required fields…` fails.
@@ -85,9 +98,10 @@ destructive `Delete` link or the external partner link, and that unapproved test
 
 ## Known limitations (this milestone)
 
-- No authentication/RBAC yet (Phase 1) — run locally only.
-- Discovery is unauthenticated and links-only; no map visualisation yet (API `/discovery/{id}/map` exists).
-- Artifacts are on a local volume (MinIO/S3 + signed URLs in Phase 6). No WebSockets yet; the UI polls.
+- No authentication/RBAC yet (Phase 1) — run locally only. This includes the live-events WebSocket.
+- Discovery is unauthenticated and links-only.
+- Artifacts are on a local volume (MinIO/S3 + signed URLs in Phase 6).
+- Tests created before version history existed have no recorded versions.
 - With *private network* enabled, an IP-literal target inside the Docker network is not blocked by name.
 - DNS results are cached per worker process (no rebinding protection yet).
 - Tickets are internal only; GitHub Issues sync is not built yet. Assignees are a per-project list, not user accounts.

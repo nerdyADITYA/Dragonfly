@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ACTIVE, api, artifactUrl } from '../api.js'
+import { ACTIVE, api, artifactUrl, useLiveEvents } from '../api.js'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Loading, fmt, inputCls } from '../ui.jsx'
 import { SEVERITIES, STATUSES } from './Findings.jsx'
 
@@ -166,7 +166,8 @@ function History({ f }) {
 export default function Finding() {
   const { id } = useParams()
   const q = useQuery({ queryKey: ['finding', id], queryFn: () => api(`/findings/${id}`),
-    refetchInterval: (q) => (q.state.data?.retest_runs.some((r) => ACTIVE.has(r.status)) ? 1500 : false) })
+    refetchInterval: (q) => (q.state.data?.retest_runs.some((r) => ACTIVE.has(r.status)) ? 5000 : false) })
+  useLiveEvents(q.data?.project_id)
   if (q.isLoading) return <Loading />
   if (q.error) return <ErrorBox error={q.error} />
   const f = q.data

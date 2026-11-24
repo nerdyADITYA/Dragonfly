@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ACTIVE, api } from '../api.js'
+import { ACTIVE, api, useLiveEvents } from '../api.js'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Loading, fmt, inputCls } from '../ui.jsx'
 import { DevelopersCard, FindingsCard, TicketsCard } from './Findings.jsx'
 import TestCases from './TestCases.jsx'
@@ -88,9 +88,10 @@ export default function Project() {
   const project = useQuery({ queryKey: ['project', id], queryFn: () => api(`/projects/${id}`) })
   const envs = useQuery({ queryKey: ['envs', id], queryFn: () => api(`/projects/${id}/environments`) })
   const scans = useQuery({ queryKey: ['scans', id], queryFn: () => api(`/projects/${id}/scans`),
-    refetchInterval: (q) => (q.state.data?.some((s) => ACTIVE.has(s.status)) ? 2000 : false) })
+    refetchInterval: (q) => (q.state.data?.some((s) => ACTIVE.has(s.status)) ? 5000 : false) })
   const runs = useQuery({ queryKey: ['runs', id], queryFn: () => api(`/projects/${id}/test-runs`),
-    refetchInterval: (q) => (q.state.data?.some((s) => ACTIVE.has(s.status)) ? 2000 : false) })
+    refetchInterval: (q) => (q.state.data?.some((s) => ACTIVE.has(s.status)) ? 5000 : false) })
+  useLiveEvents(id)
 
   if (project.isLoading) return <Loading />
   if (project.error) return <ErrorBox error={project.error} />

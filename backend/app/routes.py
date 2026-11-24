@@ -3,6 +3,8 @@
 shortcut: no authentication yet — single-user local tool until Phase 1 (auth, orgs, RBAC) lands.
 """
 import uuid
+from collections import Counter
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -20,10 +22,11 @@ from app.models import (
     Project,
     ScanRun,
     TestCase,
+    TestCaseVersion,
     TestExecution,
     TestRun,
 )
-from app.planner import generate_tests
+from app.planner import generate_tests, regenerate_test, set_definition
 from app.schemas import (
     ArtifactOut,
     DiscoveryIn,
@@ -36,16 +39,18 @@ from app.schemas import (
     ProjectIn,
     ProjectOut,
     ProjectPatch,
+    RegenerateIn,
     ScanPolicy,
     ScanRunOut,
+    TestCaseDef,
     TestCaseOut,
     TestCasePatch,
+    TestCaseVersionOut,
     TestRunDetailOut,
     TestRunIn,
     TestRunOut,
 )
 from app.scope import ScopeError, check_url
-from app.validator import fingerprint, validate
 
 router = APIRouter(prefix="/api/v1")
 
@@ -192,9 +197,23 @@ def scan_pages(scan_id: uuid.UUID, db: Session = Depends(get_db)):
 
 @router.get("/discovery/{scan_id}/map")
 def scan_map(scan_id: uuid.UUID, db: Session = Depends(get_db)):
+    from app.models import OPEN_FINDING_STATUSES, Finding
+
+    scan = get_or_404(db, ScanRun, scan_id)
     pages = db.scalars(select(DiscoveredPage).where(DiscoveredPage.scan_run_id == scan_id)).all()
     edges = db.scalars(select(ApplicationEdge).where(ApplicationEdge.scan_run_id == scan_id)).all()
-    return {"nodes": [{"id": str(p.id), "url": p.url, "title": p.title, "depth": p.depth} for p in pages],
+    # Coverage overlays (§8.5): tests and open findings per page path, across the project.
+    path = lambda u: urlsplit(u).path.rstrip("/") or "/"
+    tests = Counter(path(t.definition_json["target_url"]) for t in db.scalars(
+        select(TestCase).where(TestCase.project_id == scan.project_id,
+                               TestCase.status.notin_(("rejected", "blocked")))).all())
+    bugs = Counter(path(f.page_url) for f in db.scalars(
+        select(Finding).where(Finding.project_id == scan.project_id,
+                              Finding.status.in_(OPEN_FINDING_STATUSES))).all())
+    return {"nodes": [{"id": str(p.id), "url": p.url, "title": p.title, "depth": p.depth,
+                       "parent_id": str(p.parent_page_id) if p.parent_page_id else None,
+                       "screenshot_artifact_id": str(p.screenshot_artifact_id) if p.screenshot_artifact_id else None,
+                       "tests": tests[path(p.url)], "open_findings": bugs[path(p.url)]} for p in pages],
             "edges": [{"source": str(e.source_page_id), "target": str(e.destination_page_id), "trigger": e.trigger}
                       for e in edges]}
 
@@ -244,17 +263,52 @@ def get_test(tc_id: uuid.UUID, db: Session = Depends(get_db)):
     return get_or_404(db, TestCase, tc_id)
 
 
+def _test_env(db: Session, tc: TestCase) -> Environment:
+    scan = db.get(ScanRun, tc.scan_run_id) if tc.scan_run_id else None
+    if not scan:
+        raise HTTPException(409, "test has no source scan/environment")
+    return db.get(Environment, scan.environment_id)
+
+
 @router.patch("/test-cases/{tc_id}", response_model=TestCaseOut)
 def edit_test(tc_id: uuid.UUID, body: TestCasePatch, db: Session = Depends(get_db)):
     """Editing re-validates and returns the test to draft: edited tests need re-approval."""
     tc = get_or_404(db, TestCase, tc_id)
-    scan_env = db.get(ScanRun, tc.scan_run_id) if tc.scan_run_id else None
-    env = db.get(Environment, scan_env.environment_id) if scan_env else None
-    errors = validate(body.definition, env.base_url, ScanPolicy(**env.scan_policy)) if env else []
-    d = body.definition
-    tc.definition_json, tc.key, tc.title, tc.category, tc.priority = d.model_dump(), d.key, d.title, d.category, d.priority
-    tc.fingerprint, tc.version = fingerprint(d), tc.version + 1
-    tc.validation_errors_json, tc.status = errors, "blocked" if errors else "draft"
+    env = _test_env(db, tc)
+    set_definition(db, tc, body.definition, env.base_url, ScanPolicy(**env.scan_policy), "edited", actor="user")
+    db.commit()
+    return tc
+
+
+@router.get("/test-cases/{tc_id}/versions", response_model=list[TestCaseVersionOut])
+def test_versions(tc_id: uuid.UUID, db: Session = Depends(get_db)):
+    return db.scalars(select(TestCaseVersion).where(TestCaseVersion.test_case_id == tc_id)
+                      .order_by(TestCaseVersion.version.desc())).all()
+
+
+@router.post("/test-cases/{tc_id}/duplicate", response_model=TestCaseOut, status_code=201)
+def duplicate_test(tc_id: uuid.UUID, db: Session = Depends(get_db)):
+    src = get_or_404(db, TestCase, tc_id)
+    env = _test_env(db, src)
+    d = TestCaseDef(**src.definition_json)
+    d.key, d.title = f"{d.key}-COPY"[:60], f"{d.title} (copy)"
+    tc = TestCase(project_id=src.project_id, scan_run_id=src.scan_run_id, generated_by=src.generated_by, version=0)
+    db.add(tc)
+    set_definition(db, tc, d, env.base_url, ScanPolicy(**env.scan_policy), f"duplicated:{src.key}", actor="user")
+    db.commit()
+    return tc
+
+
+@router.post("/test-cases/{tc_id}/regenerate", response_model=TestCaseOut)
+def regenerate(tc_id: uuid.UUID, body: RegenerateIn, db: Session = Depends(get_db)):
+    tc = get_or_404(db, TestCase, tc_id)
+    try:
+        regenerate_test(db, tc, body.instructions)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(502, f"AI regeneration failed: {type(e).__name__}")
     db.commit()
     return tc
 

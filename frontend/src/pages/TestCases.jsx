@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
 import { Badge, Button, Card, Empty, ErrorBox, Field, inputCls } from '../ui.jsx'
+import TestEditor from './TestEditor.jsx'
 
 // Plain-language rendering of an action, so non-automation users can review tests (§36).
 export function describeStep(a) {
@@ -21,16 +22,45 @@ export function describeStep(a) {
   return say[a.type] || a.type
 }
 
-function TestRow({ tc, selected, onSelect }) {
+function Versions({ tcId }) {
+  const vs = useQuery({ queryKey: ['versions', tcId], queryFn: () => api(`/test-cases/${tcId}/versions`) })
+  const [shown, setShown] = useState(null)
+  return (
+    <div className="rounded border border-slate-200 bg-white p-2 text-xs">
+      <p className="font-medium">Version history</p>
+      {vs.data?.length === 0 && <p className="text-slate-500">No recorded versions (created before versioning).</p>}
+      <ul>{vs.data?.map((v) => (
+        <li key={v.version}>
+          <button className="text-indigo-700 hover:underline" onClick={() => setShown(shown === v.version ? null : v.version)}>v{v.version}</button>{' '}
+          {v.source} · {v.created_by} · {new Date(v.created_at).toLocaleString()}
+          {shown === v.version && <ol className="ml-4 list-decimal">{v.definition_json.steps.map((s, i) => <li key={i}>{describeStep(s)}</li>)}</ol>}
+        </li>
+      ))}</ul>
+    </div>
+  )
+}
+
+function TestRow({ tc, selected, onSelect, envId }) {
   const qc = useQueryClient()
+  const nav = useNavigate()
   const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState(null)
+  const [editing, setEditing] = useState(false)
+  const [regen, setRegen] = useState(null)
+  const [showVersions, setShowVersions] = useState(false)
   const d = tc.definition_json
-  const refresh = () => qc.invalidateQueries({ queryKey: ['tests', tc.project_id] })
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['tests', tc.project_id] }); qc.invalidateQueries({ queryKey: ['versions', tc.id] }) }
   const act = useMutation({ mutationFn: (verb) => api(`/test-cases/${tc.id}/${verb}`, { method: 'POST' }), onSuccess: refresh })
   const save = useMutation({
-    mutationFn: () => api(`/test-cases/${tc.id}`, { method: 'PATCH', body: { definition: JSON.parse(editing) } }),
-    onSuccess: () => { setEditing(null); refresh() },
+    mutationFn: (definition) => api(`/test-cases/${tc.id}`, { method: 'PATCH', body: { definition } }),
+    onSuccess: () => { setEditing(false); refresh() },
+  })
+  const regenerate = useMutation({
+    mutationFn: () => api(`/test-cases/${tc.id}/regenerate`, { method: 'POST', body: { instructions: regen } }),
+    onSuccess: () => { setRegen(null); refresh() },
+  })
+  const runOne = useMutation({
+    mutationFn: () => api('/test-runs', { method: 'POST', body: { environment_id: envId, test_case_ids: [tc.id] } }),
+    onSuccess: (r) => nav(`/runs/${r.id}`),
   })
   return (
     <li className="py-2">
@@ -53,24 +83,32 @@ function TestRow({ tc, selected, onSelect }) {
           {tc.validation_errors_json.length > 0 && (
             <ul className="rounded bg-orange-50 p-2 text-xs text-orange-800">{tc.validation_errors_json.map((e) => <li key={e}>⚠ {e}</li>)}</ul>
           )}
-          {editing !== null ? (
+          {editing ? (
             <>
-              <textarea className={`${inputCls} font-mono text-xs`} rows={14} value={editing} onChange={(e) => setEditing(e.target.value)} />
+              <TestEditor definition={d} saving={save.isPending} onSave={(def) => save.mutate(def)} onCancel={() => setEditing(false)} />
               <ErrorBox error={save.error} />
-              <div className="flex gap-2">
-                <Button onClick={() => save.mutate()}>Save (returns to draft)</Button>
-                <Button variant="secondary" onClick={() => setEditing(null)}>Cancel</Button>
-              </div>
             </>
           ) : (
             <div className="flex flex-wrap gap-2">
+              {tc.status === 'approved' && <Button disabled={!envId || runOne.isPending} onClick={() => runOne.mutate()}>Run</Button>}
               {['draft', 'disabled', 'rejected'].includes(tc.status) && <Button onClick={() => act.mutate('approve')}>Approve</Button>}
               {['draft', 'approved', 'blocked'].includes(tc.status) && <Button variant="danger" onClick={() => act.mutate('reject')}>Reject</Button>}
               {['draft', 'approved'].includes(tc.status) && <Button variant="secondary" onClick={() => act.mutate('disable')}>Disable</Button>}
-              <Button variant="secondary" onClick={() => setEditing(JSON.stringify(d, null, 2))}>Edit</Button>
+              <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
+              <Button variant="secondary" onClick={() => setRegen(regen === null ? '' : null)}>Regenerate</Button>
+              <Button variant="secondary" onClick={() => act.mutate('duplicate')}>Duplicate</Button>
+              <Button variant="secondary" onClick={() => setShowVersions(!showVersions)}>History (v{tc.version})</Button>
             </div>
           )}
-          <ErrorBox error={act.error} />
+          {regen !== null && !editing && (
+            <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); regenerate.mutate() }}>
+              <input aria-label="What should change" className={`${inputCls} mt-0 flex-1`} placeholder="What should change? e.g. also assert the error message"
+                value={regen} onChange={(e) => setRegen(e.target.value)} />
+              <Button disabled={regenerate.isPending}>{regenerate.isPending ? 'Regenerating…' : 'Regenerate with AI'}</Button>
+            </form>
+          )}
+          {showVersions && <Versions tcId={tc.id} />}
+          <ErrorBox error={act.error || regenerate.error || runOne.error} />
         </div>
       )}
     </li>
@@ -138,7 +176,7 @@ export default function TestCases({ projectId, envs, scans }) {
         </div>
       )}
       <ul className="divide-y divide-slate-100">
-        {tests.data?.map((t) => <TestRow key={t.id} tc={t} selected={sel.has(t.id)} onSelect={() => toggle(t.id)} />)}
+        {tests.data?.map((t) => <TestRow key={t.id} tc={t} selected={sel.has(t.id)} onSelect={() => toggle(t.id)} envId={envId || envs[0]?.id} />)}
       </ul>
     </Card>
   )
