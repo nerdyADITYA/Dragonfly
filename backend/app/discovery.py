@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.schemas import ScanPolicy
 from app.scope import DESTRUCTIVE_RE, ScopeError, check_url, in_scope
+from app.target_auth import login_path, session_state
 
 EXTRACT_JS = r"""
 () => {
@@ -110,12 +111,17 @@ def run_discovery(db: Session, scan_id) -> None:
     seen: dict[str, DiscoveredPage] = {}  # route pattern → page
     queue = deque([(normalize(base), 0, None, "initial")])
     stats = {"pages": 0, "elements": 0, "forms": 0, "skipped_destructive": 0, "skipped_out_of_scope": 0,
-             "errors": 0, "stopped_reason": "exhausted"}
+             "errors": 0, "stopped_reason": "exhausted", "authenticated": False, "login_redirects": 0}
     skipped: list[dict] = []
     rejected: set[str] = set()  # each unsafe/out-of-scope URL is recorded once
 
     try:
-        with isolated_page(base, policy) as (page, _ctx, events):
+        state = session_state(db, env)  # signs in first when the environment has a login profile
+        stats["authenticated"] = state is not None
+        lpath = login_path(db, env)
+        if state:
+            _log(db, scan, "signed in to the target with the environment's login profile")
+        with isolated_page(base, policy, storage_state=state) as (page, _ctx, events):
             while queue:
                 db.refresh(scan)
                 if scan.cancel_requested:
@@ -152,6 +158,10 @@ def run_discovery(db: Session, scan_id) -> None:
                     _log(db, scan, f"failed to load {url}: {str(e)[:300]}", "error")
                     continue
 
+                fpath, upath = urlsplit(final).path.rstrip("/") or "/", urlsplit(url).path.rstrip("/") or "/"
+                if lpath and fpath == lpath != upath:  # bounced to login: session lost or page needs another role
+                    stats["login_redirects"] += 1
+                    _log(db, scan, f"{url} redirected to the login page (session expired or insufficient role)", "warning")
                 pattern = route_pattern(final)
                 if pattern in seen:  # redirected onto an already-known page
                     continue
@@ -212,7 +222,7 @@ def run_discovery(db: Session, scan_id) -> None:
         stats["api_endpoints_seen"] = record_network_calls(db, env, api_calls)
         scan.summary_json = {**stats, "skipped": skipped[:100], "browser_events": events_summary,
                              "limitations": ["Links only: buttons and forms were not exercised during discovery.",
-                                             "Unauthenticated crawl (auth profiles arrive in a later phase)."]}
+                                             "Signed in with the environment login profile." if stats["authenticated"] else "Unauthenticated crawl: add a login profile to explore pages behind sign-in."]}
     except Exception as e:
         db.rollback()
         scan = db.get(ScanRun, scan_id)

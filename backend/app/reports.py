@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import storage
+from app.auth import AuthCtx, authenticate, org_project_ids
 from app.db import get_db
 from app.models import (
     OPEN_FINDING_STATUSES,
@@ -31,22 +32,26 @@ from app.models import (
 )
 from app.routes import get_or_404
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)])
 VERDICTS = ("passed", "failed")
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
-def _where(model, project_id):
-    q = select(model)
-    return q.where(model.project_id == project_id) if project_id else q
+def _where(model, project_ids):
+    return select(model).where(model.project_id.in_(project_ids))
 
 
 @router.get("/dashboard")
-def dashboard(project_id: uuid.UUID | None = None, days: int = 14, db: Session = Depends(get_db)):
-    runs = {r.id: r for r in db.scalars(_where(TestRun, project_id)).all()}
+def dashboard(project_id: uuid.UUID | None = None, days: int = 14, ctx: AuthCtx = Depends(authenticate),
+              db: Session = Depends(get_db)):
+    allowed = org_project_ids(db, ctx)
+    if project_id and project_id not in allowed:
+        raise HTTPException(404, "Project not found")
+    project_ids = [project_id] if project_id else allowed
+    runs = {r.id: r for r in db.scalars(_where(TestRun, project_ids)).all()}
     exs = db.scalars(select(TestExecution).where(TestExecution.test_run_id.in_(runs))).all() if runs else []
-    findings = db.scalars(_where(Finding, project_id)).all()
-    scans = db.scalars(_where(ScanRun, project_id).order_by(ScanRun.created_at.desc())).all()
+    findings = db.scalars(_where(Finding, project_ids)).all()
+    scans = db.scalars(_where(ScanRun, project_ids).order_by(ScanRun.created_at.desc())).all()
     status = Counter(e.status for e in exs)
     decided = status["passed"] + status["failed"]
     durations = [e.duration_ms for e in exs if e.duration_ms is not None and e.status in VERDICTS]
@@ -69,9 +74,8 @@ def dashboard(project_id: uuid.UUID | None = None, days: int = 14, db: Session =
 
     return {
         "scope": {"project_id": project_id, "days": days},
-        "projects": len(db.scalars(select(Project.id) if not project_id else
-                                   select(Project.id).where(Project.id == project_id)).all()),
-        "environments": len(db.scalars(_where(Environment, project_id)).all()),
+        "projects": len(project_ids),
+        "environments": len(db.scalars(_where(Environment, project_ids)).all()),
         "scans": len(scans),
         "test_runs": len(runs),
         "executions": {"total": len(exs), **{k: status[k] for k in

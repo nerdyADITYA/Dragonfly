@@ -60,10 +60,13 @@ def evidence(resp: httpx.Response, elapsed_ms: int) -> dict:
 
 
 class HttpSession:
-    def __init__(self, base_url: str, policy: ScanPolicy, budget: dict):
+    def __init__(self, base_url: str, policy: ScanPolicy, budget: dict, cookies: list[dict] = ()):
         self.base, self.policy, self.budget = base_url, policy, budget
+        jar = httpx.Cookies()
+        for c in cookies:  # signed-in session from the login profile (Playwright storage-state format)
+            jar.set(c["name"], c["value"], domain=c["domain"].lstrip("."), path=c.get("path", "/"))
         self.client = httpx.Client(timeout=policy.step_timeout_ms / 1000, follow_redirects=False,
-                                   headers={"User-Agent": USER_AGENT})
+                                   headers={"User-Agent": USER_AGENT}, cookies=jar)
         self.resp: httpx.Response | None = None
         self.current_evidence: dict | None = None  # evidence of the response being checked
         self.actual: str | None = None

@@ -87,7 +87,7 @@ def test_finding_ticket_retest(client, demo):
 
 
 def _db():
-    return SimpleNamespace(add=lambda _: None)
+    return SimpleNamespace(add=lambda _: None, info={})
 
 
 def test_secret_values_are_redacted():

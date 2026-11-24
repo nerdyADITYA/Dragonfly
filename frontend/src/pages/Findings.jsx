@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api.js'
+import { useMe } from '../Auth.jsx'
 import { Badge, Button, Card, Empty, ErrorBox, fmt, inputCls } from '../ui.jsx'
 
 export const STATUSES = ['new', 'triaged', 'assigned', 'in_progress', 'fixed', 'ready_for_retest', 'verified',
@@ -69,6 +70,7 @@ export function TicketsCard({ projectId }) {
 }
 
 export function DevelopersCard({ projectId }) {
+  const admin = useMe().can('admin')
   const qc = useQueryClient()
   const devs = useQuery({ queryKey: ['devs', projectId], queryFn: () => api(`/projects/${projectId}/developers`) })
   const [f, setF] = useState({ name: '', email: '', team: '' })
@@ -83,16 +85,16 @@ export function DevelopersCard({ projectId }) {
         {devs.data?.map((d) => (
           <li key={d.id} className="flex items-center justify-between py-1.5">
             <span>{d.name} <span className="text-xs text-slate-500">{d.email}{d.team && ` · ${d.team}`}</span></span>
-            <button className="text-xs text-red-700 hover:underline" onClick={() => del.mutate(d.id)}>Remove</button>
+            {admin && <button className="text-xs text-red-700 hover:underline" onClick={() => del.mutate(d.id)}>Remove</button>}
           </li>
         ))}
       </ul>
-      <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); add.mutate() }}>
+      {admin && <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); add.mutate() }}>
         <input aria-label="Name" required placeholder="Name" className={`${inputCls} mt-0 w-36 flex-1`} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <input aria-label="Email" placeholder="Email" type="email" className={`${inputCls} mt-0 w-44 flex-1`} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
         <input aria-label="Team" placeholder="Team" className={`${inputCls} mt-0 w-28`} value={f.team} onChange={(e) => setF({ ...f, team: e.target.value })} />
         <Button disabled={add.isPending}>Add</Button>
-      </form>
+      </form>}
       <ErrorBox error={add.error || del.error} />
     </Card>
   )

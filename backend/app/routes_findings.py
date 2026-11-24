@@ -1,4 +1,4 @@
-"""Findings, developers, tickets and retests (§27.7–27.8). Same no-auth shortcut as routes.py."""
+"""Findings, developers, tickets and retests (§27.7–27.8)."""
 import uuid
 from urllib.parse import urlsplit
 
@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import findings as fx
+from app.auth import AuthCtx, authenticate, require_admin
 from app.db import get_db
 from app.models import Artifact, Developer, Environment, ExecutionStep, Finding, FindingEvent, TestCase, TestRun, Ticket
 from app.routes import _start_run, get_or_404
@@ -25,7 +26,7 @@ from app.schemas import (
     TicketOut,
 )
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)])
 
 
 def _apply(db: Session, fn, *args, **kw):
@@ -171,7 +172,8 @@ def list_devs(project_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/projects/{project_id}/developers", response_model=DeveloperOut, status_code=201)
-def add_dev(project_id: uuid.UUID, body: DeveloperIn, db: Session = Depends(get_db)):
+def add_dev(project_id: uuid.UUID, body: DeveloperIn, _: AuthCtx = Depends(require_admin),
+            db: Session = Depends(get_db)):
     from app.models import Project
 
     get_or_404(db, Project, project_id)
@@ -182,7 +184,7 @@ def add_dev(project_id: uuid.UUID, body: DeveloperIn, db: Session = Depends(get_
 
 
 @router.delete("/developers/{dev_id}", status_code=204)
-def delete_dev(dev_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_dev(dev_id: uuid.UUID, _: AuthCtx = Depends(require_admin), db: Session = Depends(get_db)):
     db.delete(get_or_404(db, Developer, dev_id))
     db.commit()
 

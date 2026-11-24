@@ -28,7 +28,7 @@ def _redact_url(url: str) -> str:
 
 
 @contextmanager
-def isolated_page(base_url: str, policy: ScanPolicy, record_trace: bool = False):
+def isolated_page(base_url: str, policy: ScanPolicy, record_trace: bool = False, storage_state: dict | None = None):
     """Yield (page, context, events). Every request is scope-checked; out-of-scope ones are aborted."""
     events = Events()
     with sync_playwright() as pw:
@@ -36,7 +36,7 @@ def isolated_page(base_url: str, policy: ScanPolicy, record_trace: bool = False)
         try:
             context = browser.new_context(
                 viewport={"width": policy.viewport_width, "height": policy.viewport_height},
-                accept_downloads=False, service_workers="block",
+                accept_downloads=False, service_workers="block", storage_state=storage_state,
             )
             if record_trace:
                 context.tracing.start(screenshots=True, snapshots=True)

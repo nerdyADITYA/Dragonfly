@@ -24,6 +24,31 @@ deterministically with Playwright, and captures evidence. AI plans; tools execut
 - **Live updates**: worker → Redis pub/sub → `/api/v1/ws/projects/{id}` WebSocket. Pages refresh as
   pages are found and tests finish; polling is only a fallback.
 
+## Accounts and signing in to your app (Phase 1)
+
+**Dragonfly accounts.** The first visit shows a one-time setup: create your organization and its owner
+account (existing projects move into it). Owners and admins then add members on **Team**.
+
+| Role | Can |
+|---|---|
+| viewer | read everything in the organization |
+| member | run scans and tests, edit tests, triage findings, tickets, retests |
+| admin | member + projects, environments/scope, login profiles, developers, team |
+| owner | admin + manage owners |
+
+Every API request needs a session (HttpOnly cookie; only a SHA-256 of the token is stored, so sign-out
+revokes it). Every id in a URL or request body is checked against your organization, and another
+tenant's ids look exactly like missing ones (404). Cross-site writes are refused, failed sign-ins are
+throttled, passwords use scrypt, and the audit log records who did what.
+
+**Signing in to the app under test.** On an environment, *Add login* stores a login URL, a test
+account and its password (Fernet-encrypted with `DRAGONFLY_SECRET_KEY`; never shown again).
+*Test login* checks it. Scans and test runs then sign in once, in a browser context with tracing off so
+the password never reaches a trace or screenshot, and share the session in memory with browser tests
+and the HTTP/API runner. Being redirected to the login page mid-scan is reported; a failed sign-in
+blocks the run (`blocked: auth`) instead of producing false findings. Endpoints the OpenAPI spec marks
+as needing auth are skipped, with a reason, until a login profile exists.
+
 ## API & security testing (Phases 7–8)
 
 On the project page, **API & security testing** lets you pick a security profile, import an OpenAPI spec
@@ -85,7 +110,7 @@ web (React/Vite) ──► api (FastAPI) ──► postgres
 ## Run it (Docker)
 
 ```powershell
-copy .env.example .env      # optionally add ANTHROPIC_API_KEY
+copy .env.example .env      # set DRAGONFLY_SECRET_KEY (command inside); optionally ANTHROPIC_API_KEY
 docker compose up --build
 ```
 
@@ -119,8 +144,11 @@ destructive `Delete` link or the external partner link, and that unapproved test
 
 ## Known limitations (this milestone)
 
-- No authentication/RBAC yet (Phase 1) — run locally only. This includes the live-events WebSocket.
-- Discovery is unauthenticated and links-only.
+- One organization per user; members are added with an initial password (no email invites, SSO or MFA yet).
+- Target sign-in supports form logins (no CAPTCHA, MFA or SSO flows); authorization checks across two
+  test accounts are not built yet.
+- Sign-in throttling counts are per API process.
+- Discovery follows links only (no buttons, tabs or menus).
 - Artifacts are on a local volume (MinIO/S3 + signed URLs in Phase 6).
 - Tests created before version history existed have no recorded versions.
 - OpenAPI import accepts JSON only (no YAML); APIs that need authentication are not tested yet.

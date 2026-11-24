@@ -28,9 +28,52 @@ class Timestamps:
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
+ROLES = ("viewer", "member", "admin", "owner")  # ascending privilege
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+    id: Mapped[uuid.UUID] = pk()
+    name: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[uuid.UUID] = pk()
+    email: Mapped[str] = mapped_column(String(320), unique=True)  # stored lower-case
+    display_name: Mapped[str] = mapped_column(String(200))
+    password_hash: Mapped[str] = mapped_column(String(300))  # scrypt$n$r$p$salt$hash
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class OrganizationMember(Base):
+    __tablename__ = "organization_members"
+    __table_args__ = (UniqueConstraint("organization_id", "user_id", name="uq_member_org_user"),)
+    id: Mapped[uuid.UUID] = pk()
+    organization_id: Mapped[uuid.UUID] = fk("organizations.id")
+    user_id: Mapped[uuid.UUID] = fk("users.id")
+    role: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class UserSession(Base):
+    """Server-side session: the cookie holds a random token; only its SHA-256 is stored (revocable)."""
+
+    __tablename__ = "user_sessions"
+    id: Mapped[uuid.UUID] = pk()
+    user_id: Mapped[uuid.UUID] = fk("users.id")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Project(Timestamps, Base):
     __tablename__ = "projects"
     id: Mapped[uuid.UUID] = pk()
+    # NULL only for projects created before accounts existed; the first registered org claims them.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE", name="fk_projects_organization_id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     repository_url: Mapped[str | None] = mapped_column(String(500))
@@ -49,6 +92,25 @@ class Environment(Timestamps, Base):
     scan_policy: Mapped[dict] = mapped_column(JSONType)
     authorization_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="active")
+
+
+class AuthProfile(Timestamps, Base):
+    """How to sign in to the app under test (§7.2, §22 auth_profiles). One per environment.
+    The password is Fernet-encrypted; it is decrypted only to type it into the login form."""
+
+    __tablename__ = "auth_profiles"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = fk("projects.id")
+    environment_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("environments.id", ondelete="CASCADE"),
+                                                      unique=True)
+    login_url: Mapped[str] = mapped_column(String(2000))
+    username: Mapped[str] = mapped_column(String(320))
+    password_encrypted: Mapped[str] = mapped_column(Text)
+    username_selector: Mapped[str] = mapped_column(String(300), default="")
+    password_selector: Mapped[str] = mapped_column(String(300), default="")
+    submit_selector: Mapped[str] = mapped_column(String(300), default="")
+    success_url_contains: Mapped[str] = mapped_column(String(500), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class ScanRun(Base):
@@ -133,6 +195,7 @@ class DiscoveredEndpoint(Base):
     response_content_type: Mapped[str] = mapped_column(String(100), default="")
     response_schema_json: Mapped[dict | None] = mapped_column(JSONType)  # 2xx schema with components for $ref
     source: Mapped[str] = mapped_column(String(20))  # openapi | network
+    requires_auth: Mapped[bool] = mapped_column(Boolean, default=False)  # from OpenAPI `security`
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
@@ -254,6 +317,7 @@ class AuditLog(Base):
     test_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
     severity: Mapped[str] = mapped_column(String(10), default="info")
     source: Mapped[str] = mapped_column(String(30))
+    actor: Mapped[str] = mapped_column(String(320), default="system")  # who did it (§29.7)
     message: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[dict] = mapped_column(JSONType, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)

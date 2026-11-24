@@ -2,9 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
+import { useMe } from '../Auth.jsx'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Loading, fmt, inputCls } from '../ui.jsx'
 
 export default function Projects() {
+  const me = useMe()
   const qc = useQueryClient()
   const nav = useNavigate()
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => api('/projects') })
@@ -36,14 +38,14 @@ export default function Projects() {
             </ul>
           </Card>
         </div>
-        <Card title="New project">
+        {me.can('admin') && <Card title="New project">
           <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); create.mutate() }}>
             <Field label="Name"><input className={inputCls} required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label="Description"><textarea className={inputCls} rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
             <ErrorBox error={create.error} />
             <Button disabled={create.isPending}>Create project</Button>
           </form>
-        </Card>
+        </Card>}
       </div>
     </>
   )

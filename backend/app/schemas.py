@@ -439,3 +439,30 @@ class EndpointOut(ORM):
 
 class GenerateApiTestsIn(BaseModel):
     scan_run_id: uuid.UUID
+
+
+# ---------- Target-app login profiles ----------
+
+
+class AuthProfileIn(BaseModel):
+    login_url: str = Field(max_length=2000)
+    username: str = Field(min_length=1, max_length=320)
+    password: str | None = Field(None, max_length=500, description="Required when creating; omit to keep the stored one")
+    username_selector: str = Field("", max_length=300, description="CSS; empty = auto-detect")
+    password_selector: str = Field("", max_length=300, description="CSS; empty = input[type=password]")
+    submit_selector: str = Field("", max_length=300, description="CSS; empty = press Enter")
+    success_url_contains: str = Field("", max_length=500, description="Empty = 'left the login page'")
+    enabled: bool = True
+
+
+class AuthProfileOut(ORM):
+    environment_id: uuid.UUID
+    login_url: str
+    username: str
+    username_selector: str
+    password_selector: str
+    submit_selector: str
+    success_url_contains: str
+    enabled: bool
+    updated_at: datetime
+    has_password: bool = True  # the password itself is never returned

@@ -22,6 +22,7 @@ from app.http_checks import HttpSession, StepError
 from app.models import Environment, ExecutionStep, Finding, TestCase, TestExecution, TestRun
 from app.schemas import Action, ScanPolicy, TestCaseDef
 from app.scope import ScopeError, check_url
+from app.target_auth import session_state
 from app.validator import validate
 
 TERMINAL = {"passed", "failed", "blocked", "skipped", "timed_out", "cancelled", "inconclusive"}
@@ -141,15 +142,15 @@ class BrowserSession:
 
 
 @contextmanager
-def _session(http: bool, env: Environment, policy: ScanPolicy, budget: dict):
+def _session(http: bool, env: Environment, policy: ScanPolicy, budget: dict, auth_state: dict | None):
     if http:
-        s = HttpSession(env.base_url, policy, budget)
+        s = HttpSession(env.base_url, policy, budget, cookies=(auth_state or {}).get("cookies", []))
         try:
             yield s
         finally:
             s.close()
     else:
-        with isolated_page(env.base_url, policy, record_trace=True) as (page, ctx, events):
+        with isolated_page(env.base_url, policy, record_trace=True, storage_state=auth_state) as (page, ctx, events):
             yield BrowserSession(page, ctx, events, env.base_url, policy)
 
 
@@ -157,7 +158,8 @@ STEP_ERRORS = (PWTimeout, PWError, httpx.HTTPError, StepError)
 
 
 def execute(db: Session, run: TestRun, tc: TestCase, env: Environment, attempt: int = 1,
-            definition: dict | None = None, budget: dict | None = None) -> TestExecution:
+            definition: dict | None = None, budget: dict | None = None, auth_state: dict | None = None,
+            auth_error: str | None = None) -> TestExecution:
     """`definition` overrides the test's current version (retests replay the exact original snapshot).
     `budget` is the run-wide HTTP request budget shared by all tests in the run."""
     definition = definition or tc.definition_json
@@ -175,13 +177,16 @@ def execute(db: Session, run: TestRun, tc: TestCase, env: Environment, attempt: 
     if errors := validate(test, env.base_url, policy):
         ex.status, ex.failure_type, ex.failure_message = "blocked", "policy", "; ".join(errors)
         return _finish(db, ex)
+    if auth_error:  # the app's login failed: results would be meaningless, so don't run (not an app defect)
+        ex.status, ex.failure_type, ex.failure_message = "blocked", "auth", f"Sign-in to the target failed: {auth_error}"
+        return _finish(db, ex)
 
     http = test.steps[0].type == "api_request"
     deadline = time.monotonic() + policy.test_timeout_seconds
     assertions: list[dict] = []
     t0 = time.monotonic()
     try:
-        with _session(http, env, policy, budget) as sess:
+        with _session(http, env, policy, budget, auth_state) as sess:
             failed = False
             for i, a in enumerate(test.steps, 1):
                 db.refresh(run)
@@ -290,6 +295,11 @@ def run_tests(db: Session, run_id, test_case_ids: list) -> None:
     db.commit()
     publish(run.project_id, "test_run.started", run_id=run.id)
     retest_tc = original_def = None
+    state = auth_error = None
+    try:
+        state = session_state(db, env)  # sign in once per run; the session lives only in memory
+    except Exception as e:
+        auth_error = f"{type(e).__name__}: {str(e)[:300]}"
     budget = {"left": ScanPolicy(**env.scan_policy).max_requests}  # run-wide HTTP request cap (12.6)
     if run.retest_finding_id:  # retest replays the exact test version that detected the defect (§16.4)
         f = db.get(Finding, run.retest_finding_id)
@@ -304,10 +314,11 @@ def run_tests(db: Session, run_id, test_case_ids: list) -> None:
             status = "skipped"
         else:
             snap = original_def if tc.id == retest_tc else None
-            ex = execute(db, run, tc, env, definition=snap, budget=budget)
+            ex = execute(db, run, tc, env, definition=snap, budget=budget, auth_state=state, auth_error=auth_error)
             # Retry only infrastructure failures, keeping the first attempt (§10.6).
             if ex.status == "inconclusive":
-                ex = execute(db, run, tc, env, attempt=2, definition=snap, budget=budget)
+                ex = execute(db, run, tc, env, attempt=2, definition=snap, budget=budget, auth_state=state,
+                             auth_error=auth_error)
             status = ex.status
             try:
                 findings.record(db, run, ex)

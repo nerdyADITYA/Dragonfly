@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app import ai
+from app.auth import actor as auth_actor
 from app.models import DiscoveredPage, Environment, ScanRun, TestCase, TestCaseVersion
 from app.schemas import Action, ScanPolicy, Target, TestCaseDef, TestPlan
 from app.validator import fingerprint, validate
@@ -165,7 +166,7 @@ def set_definition(db: Session, tc: TestCase, d: TestCaseDef, base_url: str, pol
     tc.validation_errors_json, tc.status = errors, "blocked" if errors else "draft"
     db.flush()
     db.add(TestCaseVersion(test_case_id=tc.id, version=tc.version, definition_json=tc.definition_json,
-                           source=source[:80], created_by=actor))
+                           source=source[:80], created_by=auth_actor(db) if actor == "user" else actor))
 
 
 REGEN_PROMPT = SYSTEM_PROMPT + """

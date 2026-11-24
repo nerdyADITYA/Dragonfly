@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ACTIVE, api, useLiveEvents } from '../api.js'
+import { useMe } from '../Auth.jsx'
+import LoginProfile from './LoginProfile.jsx'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Loading, fmt, inputCls } from '../ui.jsx'
 import { DevelopersCard, FindingsCard, TicketsCard } from './Findings.jsx'
 import ApiSecurityCard from './ApiSecurity.jsx'
@@ -84,6 +86,7 @@ function ScanConfirm({ env, projectId, onClose }) {
 
 export default function Project() {
   const { id } = useParams()
+  const me = useMe()
   const [confirming, setConfirming] = useState(null)
   const [showEnvForm, setShowEnvForm] = useState(false)
   const project = useQuery({ queryKey: ['project', id], queryFn: () => api(`/projects/${id}`) })
@@ -104,7 +107,7 @@ export default function Project() {
         <p className="text-sm text-slate-500">{project.data.description}</p>
       </div>
 
-      <Card title="Environments" actions={<Button variant="secondary" onClick={() => setShowEnvForm(!showEnvForm)}>{showEnvForm ? 'Close' : 'Add environment'}</Button>}>
+      <Card title="Environments" actions={me.can('admin') && <Button variant="secondary" onClick={() => setShowEnvForm(!showEnvForm)}>{showEnvForm ? 'Close' : 'Add environment'}</Button>}>
         {showEnvForm && <div className="mb-4 border-b border-slate-100 pb-4"><EnvironmentForm projectId={id} /></div>}
         {envs.data?.length === 0 && !showEnvForm && <Empty>Add an environment (target URL + scope) before scanning.</Empty>}
         <ul className="divide-y divide-slate-100">
@@ -116,8 +119,9 @@ export default function Project() {
                   {!e.authorization_confirmed && <Badge>authorization not confirmed</Badge>}
                   <p className="text-xs text-slate-500">{e.base_url}</p>
                 </div>
-                <Button disabled={!e.authorization_confirmed} onClick={() => setConfirming(e.id)}>Discover</Button>
+                <Button disabled={!e.authorization_confirmed || !me.can('member')} onClick={() => setConfirming(e.id)}>Discover</Button>
               </div>
+              <LoginProfile env={e} canEdit={me.can('admin')} />
               {confirming === e.id && <ScanConfirm env={e} projectId={id} onClose={() => setConfirming(null)} />}
             </li>
           ))}

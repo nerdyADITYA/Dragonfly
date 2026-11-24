@@ -17,6 +17,7 @@ from app.models import DiscoveredEndpoint, DiscoveredForm, DiscoveredPage, Envir
 from app.planner import set_definition
 from app.schemas import Action, ScanPolicy, TestCaseDef
 from app.scope import DESTRUCTIVE_RE, check_url
+from app.target_auth import profile_for
 from app.validator import fingerprint
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
@@ -83,7 +84,8 @@ def import_openapi(db: Session, env: Environment, spec: dict) -> dict:
             new = _upsert(db, env, method.upper(), path[:1000], "openapi", operation_id=str(op.get("operationId", ""))[:200],
                           summary=str(op.get("summary", ""))[:500], parameters_json=params,
                           has_request_body="requestBody" in op, response_content_type=ctype[:100],
-                          response_schema_json=schema)
+                          response_schema_json=schema,
+                          requires_auth=bool(op.get("security", spec.get("security"))))
             created += new
             updated += not new
     db.commit()
@@ -118,7 +120,8 @@ def _sample(param_type: str, kind: str) -> str:
     return "not-a-number" if param_type in ("integer", "number") else ""
 
 
-def api_tests(endpoints: list[DiscoveredEndpoint], base: str) -> tuple[list[TestCaseDef], list[dict]]:
+def api_tests(endpoints: list[DiscoveredEndpoint], base: str, authenticated: bool = False
+              ) -> tuple[list[TestCaseDef], list[dict]]:
     tests, skipped = [], []
     for n, ep in enumerate(sorted(endpoints, key=lambda e: (e.path, e.method)), 1):
         label = f"{ep.method} {ep.path}"
@@ -129,29 +132,31 @@ def api_tests(endpoints: list[DiscoveredEndpoint], base: str) -> tuple[list[Test
         if DESTRUCTIVE_RE.search(words):
             skipped.append({"endpoint": label, "reason": "looks destructive"})
             continue
+        if ep.requires_auth and not authenticated:
+            skipped.append({"endpoint": label, "reason": "requires sign-in: add a login profile to test it"})
+            continue
         path_params = [p for p in ep.parameters_json if p["in"] == "path"]
         if any(p["in"] == "query" and p["required"] for p in ep.parameters_json):
             skipped.append({"endpoint": label, "reason": "needs required query parameters"})
             continue
         json_api = ep.response_content_type.startswith("application/json") or ep.source == "network"
         src = [f"{ep.source}: {label}"]
+        if not json_api:
+            skipped.append({"endpoint": label, "reason": "HTML page (covered by browser tests)"})
+            continue
         if not path_params:
             url = urljoin(base, ep.path.lstrip("/"))
             steps = [_get(url), Action(type="assert_status", value="2xx", description="Responds successfully")]
             schema = {k: v for k, v in (ep.response_schema_json or {}).items() if k != "components"}
-            if json_api and schema:
+            if schema:
                 steps.append(Action(type="assert_json_schema", json_schema=json.dumps(ep.response_schema_json),
                                     description="Body matches the documented response schema"))
             tests.append(_t(f"API-{n:03d}", f"{label} responds with 2xx" + (" and documented schema" if len(steps) > 2 else ""),
                             "api", "P2", url, steps, sources=src, outcomes=["2xx status", "valid response body"]))
-            if json_api:
-                tests.append(_t(f"SEC-DATA-{n:03d}", f"{label} does not expose secret fields", "security", "P1", url,
-                                [_get(url), Action(type="assert_body_not", value=SECRET_KEY_PATTERN,
-                                                   description="No password/token/secret keys in the response")],
-                                sources=src, outcomes=["No credential-like fields are returned"]))
-            continue
-        if not json_api:
-            skipped.append({"endpoint": label, "reason": "HTML page with path parameters (covered by browser tests)"})
+            tests.append(_t(f"SEC-DATA-{n:03d}", f"{label} does not expose secret fields", "security", "P1", url,
+                            [_get(url), Action(type="assert_body_not", value=SECRET_KEY_PATTERN,
+                                               description="No password/token/secret keys in the response")],
+                            sources=src, outcomes=["No credential-like fields are returned"]))
             continue
         for kind, want, title in (("missing", "404", "returns 404 for a non-existent id"),
                                   ("invalid", "4xx", "rejects a malformed id with 4xx")):
@@ -176,7 +181,7 @@ SECURITY_HEADERS = [  # (header, regex or None, priority, why)
 
 
 def security_tests(db: Session, scan: ScanRun, env: Environment, endpoints: list[DiscoveredEndpoint],
-                   policy: ScanPolicy) -> list[TestCaseDef]:
+                   policy: ScanPolicy, authenticated: bool = False) -> list[TestCaseDef]:
     base = env.base_url
     https = urlsplit(base).scheme == "https"
     src = [f"base URL {base}"]
@@ -194,8 +199,9 @@ def security_tests(db: Session, scan: ScanRun, env: Environment, endpoints: list
                   [_get(probe, desc="Request a page that does not exist"),
                    Action(type="assert_body_not", value=LEAK_PATTERN, description="No stack traces, file paths or SQL")],
                   sources=src, outcomes=["Generic error message without implementation details"]))
-    cors_target = next((urljoin(base, e.path.lstrip("/")) for e in endpoints
-                        if e.method == "GET" and "{" not in e.path and e.response_content_type.startswith("application/json")), base)
+    cors_target = next((urljoin(base, e.path.lstrip("/")) for e in sorted(endpoints, key=lambda e: e.path)
+                        if e.method == "GET" and "{" not in e.path and (authenticated or not e.requires_auth)
+                        and e.response_content_type.startswith("application/json")), base)
     out.append(_t("SEC-CORS-01", "CORS does not trust arbitrary origins", "security", "P1", cors_target,
                   [_get(cors_target, {"Origin": CORS_PROBE_ORIGIN}, "GET with a foreign Origin header"),
                    Action(type="assert_header_not", key="Access-Control-Allow-Origin",
@@ -225,9 +231,10 @@ def generate(db: Session, scan: ScanRun) -> dict:
     env = db.get(Environment, scan.environment_id)
     policy = ScanPolicy(**env.scan_policy)
     endpoints = db.scalars(select(DiscoveredEndpoint).where(DiscoveredEndpoint.environment_id == env.id)).all()
-    candidates, skipped = api_tests(endpoints, env.base_url)
+    authenticated = profile_for(db, env) is not None  # tests then run with the signed-in session
+    candidates, skipped = api_tests(endpoints, env.base_url, authenticated)
     if policy.security_profile != "off":
-        candidates += security_tests(db, scan, env, endpoints, policy)
+        candidates += security_tests(db, scan, env, endpoints, policy, authenticated)
     existing = set(db.scalars(select(TestCase.fingerprint).where(TestCase.project_id == scan.project_id)))
     created = blocked = dup = 0
     by_category = {"api": 0, "security": 0}
@@ -243,6 +250,7 @@ def generate(db: Session, scan: ScanRun) -> dict:
         by_category[t.category] += 1
         created += 1
     db.commit()
-    return {"generated_by": GENERATOR, "endpoints": len(endpoints), "created": created, "by_category": by_category,
+    return {"generated_by": GENERATOR, "endpoints": len(endpoints), "authenticated": authenticated,
+            "created": created, "by_category": by_category,
             "duplicates_skipped": dup, "blocked_by_validator": blocked, "skipped_endpoints": skipped,
             "security_profile": policy.security_profile}

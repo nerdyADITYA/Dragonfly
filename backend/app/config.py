@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     artifact_dir: str = "./artifacts"
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    # Fernet key encrypting stored target-app passwords. Generate with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    dragonfly_secret_key: str | None = None
+    cookie_secure: bool = False  # set true behind HTTPS
+    session_days: int = 7
+
     anthropic_api_key: str | None = None
     ai_model: str = "claude-opus-5-5"
     ai_effort: str = "medium"

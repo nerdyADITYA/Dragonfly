@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import ai
+from app.auth import actor as auth_actor
 from app.events import publish
 from app.models import (
     FINDING_STATUSES,
@@ -139,6 +140,7 @@ def fingerprint(tc_id, step_number: int, action_type: str) -> str:
 
 
 def event(db, f: Finding, event_type: str, message: str = "", actor: str = "system", **data):
+    actor = auth_actor(db) if actor == "user" else actor  # "user" = whoever is signed in
     db.add(FindingEvent(finding_id=f.id, actor=actor, event_type=event_type, message=message, data_json=data))
 
 

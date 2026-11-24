@@ -1,6 +1,7 @@
-"""REST API v1 (§27) for Milestones A–C.
+"""REST API v1 (§27): projects, environments, discovery, test cases, runs, artifacts.
 
-shortcut: no authentication yet — single-user local tool until Phase 1 (auth, orgs, RBAC) lands.
+Every route requires a signed-in user (router dependency `auth.authenticate`), which also tenant-checks
+ids in the URL; `get_or_404` tenant-checks ids that arrive in request bodies.
 """
 import uuid
 from collections import Counter
@@ -12,11 +13,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app import storage
+from app.auth import AuthCtx, actor, authenticate, can_access, require_admin
+from app.browser import isolated_page
+from app.credentials import CredentialError, decrypt, encrypt
 from app.db import get_db
 from app.models import (
     ApplicationEdge,
     Artifact,
     AuditLog,
+    AuthProfile,
     DiscoveredPage,
     Environment,
     Project,
@@ -29,6 +34,8 @@ from app.models import (
 from app.planner import generate_tests, regenerate_test, set_definition
 from app.schemas import (
     ArtifactOut,
+    AuthProfileIn,
+    AuthProfileOut,
     DiscoveryIn,
     EnvironmentIn,
     EnvironmentOut,
@@ -51,31 +58,33 @@ from app.schemas import (
     TestRunOut,
 )
 from app.scope import ScopeError, check_url
+from app.target_auth import LoginFailed, login
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)])
 
 
 def get_or_404(db: Session, model, id_: uuid.UUID):
     obj = db.get(model, id_)
-    if not obj:
+    if not obj or not can_access(db, obj):  # tenant check for ids that arrive in bodies, not just URLs
         raise HTTPException(404, f"{model.__name__} not found")
     return obj
 
 
 def audit(db, message, source="api", **kw):
-    db.add(AuditLog(source=source, message=message, **kw))
+    db.add(AuditLog(source=source, message=message, actor=actor(db), **kw))
 
 
 # ---------------- projects ----------------
 
 @router.get("/projects", response_model=list[ProjectOut])
-def list_projects(db: Session = Depends(get_db)):
-    return db.scalars(select(Project).order_by(Project.created_at.desc())).all()
+def list_projects(ctx: AuthCtx = Depends(authenticate), db: Session = Depends(get_db)):
+    return db.scalars(select(Project).where(Project.organization_id == ctx.org_id)
+                      .order_by(Project.created_at.desc())).all()
 
 
 @router.post("/projects", response_model=ProjectOut, status_code=201)
-def create_project(body: ProjectIn, db: Session = Depends(get_db)):
-    p = Project(**body.model_dump())
+def create_project(body: ProjectIn, ctx: AuthCtx = Depends(require_admin), db: Session = Depends(get_db)):
+    p = Project(**body.model_dump(), organization_id=ctx.org_id)
     db.add(p)
     db.flush()
     audit(db, f"project created: {p.name}", project_id=p.id)
@@ -89,7 +98,8 @@ def get_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectOut)
-def patch_project(project_id: uuid.UUID, body: ProjectPatch, db: Session = Depends(get_db)):
+def patch_project(project_id: uuid.UUID, body: ProjectPatch, _: AuthCtx = Depends(require_admin),
+                  db: Session = Depends(get_db)):
     p = get_or_404(db, Project, project_id)
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(p, k, v)
@@ -99,7 +109,7 @@ def patch_project(project_id: uuid.UUID, body: ProjectPatch, db: Session = Depen
 
 
 @router.delete("/projects/{project_id}", status_code=204)
-def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_project(project_id: uuid.UUID, _: AuthCtx = Depends(require_admin), db: Session = Depends(get_db)):
     db.delete(get_or_404(db, Project, project_id))
     db.commit()
 
@@ -119,7 +129,8 @@ def list_envs(project_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/projects/{project_id}/environments", response_model=EnvironmentOut, status_code=201)
-def create_env(project_id: uuid.UUID, body: EnvironmentIn, db: Session = Depends(get_db)):
+def create_env(project_id: uuid.UUID, body: EnvironmentIn, _: AuthCtx = Depends(require_admin),
+               db: Session = Depends(get_db)):
     get_or_404(db, Project, project_id)
     base = str(body.base_url)
     _validate_env(base, body.scan_policy)
@@ -134,7 +145,8 @@ def create_env(project_id: uuid.UUID, body: EnvironmentIn, db: Session = Depends
 
 
 @router.patch("/environments/{env_id}", response_model=EnvironmentOut)
-def patch_env(env_id: uuid.UUID, body: EnvironmentPatch, db: Session = Depends(get_db)):
+def patch_env(env_id: uuid.UUID, body: EnvironmentPatch, _: AuthCtx = Depends(require_admin),
+              db: Session = Depends(get_db)):
     env = get_or_404(db, Environment, env_id)
     data = body.model_dump(exclude_unset=True, mode="json")
     if "scan_policy" in data or "base_url" in data:
@@ -147,9 +159,76 @@ def patch_env(env_id: uuid.UUID, body: EnvironmentPatch, db: Session = Depends(g
 
 
 @router.delete("/environments/{env_id}", status_code=204)
-def delete_env(env_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_env(env_id: uuid.UUID, _: AuthCtx = Depends(require_admin), db: Session = Depends(get_db)):
     db.delete(get_or_404(db, Environment, env_id))
     db.commit()
+
+
+# ---------------- target-app login profile ----------------
+
+def _profile(db: Session, env_id: uuid.UUID) -> AuthProfile | None:
+    return db.scalars(select(AuthProfile).where(AuthProfile.environment_id == env_id)).first()
+
+
+@router.get("/environments/{env_id}/auth-profile", response_model=AuthProfileOut | None)
+def get_auth_profile(env_id: uuid.UUID, db: Session = Depends(get_db)):
+    return _profile(db, env_id)
+
+
+@router.put("/environments/{env_id}/auth-profile", response_model=AuthProfileOut)
+def put_auth_profile(env_id: uuid.UUID, body: AuthProfileIn, _: AuthCtx = Depends(require_admin),
+                     db: Session = Depends(get_db)):
+    env = get_or_404(db, Environment, env_id)
+    try:
+        check_url(body.login_url, env.base_url, ScanPolicy(**env.scan_policy))
+    except ScopeError as e:
+        raise HTTPException(422, f"login URL rejected by scope policy: {e}")
+    prof = _profile(db, env_id)
+    if not prof and not body.password:
+        raise HTTPException(422, "password is required for a new login profile")
+    fields = body.model_dump(exclude={"password"})
+    try:
+        secret = encrypt(body.password) if body.password else None
+    except CredentialError as e:
+        raise HTTPException(409, str(e))
+    if prof:
+        for k, v in fields.items():
+            setattr(prof, k, v)
+        if secret:
+            prof.password_encrypted = secret
+    else:
+        prof = AuthProfile(project_id=env.project_id, environment_id=env.id, password_encrypted=secret, **fields)
+        db.add(prof)
+    audit(db, f"login profile saved for {env.name} (user {body.username}; password "
+              f"{'changed' if secret else 'unchanged'})", project_id=env.project_id)
+    db.commit()
+    return prof
+
+
+@router.delete("/environments/{env_id}/auth-profile", status_code=204)
+def delete_auth_profile(env_id: uuid.UUID, _: AuthCtx = Depends(require_admin), db: Session = Depends(get_db)):
+    if prof := _profile(db, env_id):
+        db.delete(prof)
+        audit(db, "login profile removed", project_id=prof.project_id)
+        db.commit()
+
+
+@router.post("/environments/{env_id}/auth-profile/test")
+def test_auth_profile(env_id: uuid.UUID, _: AuthCtx = Depends(require_admin), db: Session = Depends(get_db)):
+    """Signs in once with a real browser and reports the outcome; the session is discarded."""
+    env = get_or_404(db, Environment, env_id)
+    prof = _profile(db, env_id)
+    if not prof:
+        raise HTTPException(404, "no login profile for this environment")
+    policy = ScanPolicy(**env.scan_policy)
+    try:
+        with isolated_page(env.base_url, policy) as (page, _ctx, _events):
+            final = login(page, prof, decrypt(prof.password_encrypted), env.base_url, policy)
+        return {"ok": True, "message": f"Signed in; landed on {urlsplit(final).path}"}
+    except (LoginFailed, CredentialError, ScopeError) as e:
+        return {"ok": False, "message": str(e)}
+    except Exception as e:  # browser/network trouble
+        return {"ok": False, "message": f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"}
 
 
 # ---------------- discovery ----------------
@@ -275,7 +354,7 @@ def edit_test(tc_id: uuid.UUID, body: TestCasePatch, db: Session = Depends(get_d
     """Editing re-validates and returns the test to draft: edited tests need re-approval."""
     tc = get_or_404(db, TestCase, tc_id)
     env = _test_env(db, tc)
-    set_definition(db, tc, body.definition, env.base_url, ScanPolicy(**env.scan_policy), "edited", actor="user")
+    set_definition(db, tc, body.definition, env.base_url, ScanPolicy(**env.scan_policy), "edited", actor=actor(db))
     db.commit()
     return tc
 
@@ -294,7 +373,7 @@ def duplicate_test(tc_id: uuid.UUID, db: Session = Depends(get_db)):
     d.key, d.title = f"{d.key}-COPY"[:60], f"{d.title} (copy)"
     tc = TestCase(project_id=src.project_id, scan_run_id=src.scan_run_id, generated_by=src.generated_by, version=0)
     db.add(tc)
-    set_definition(db, tc, d, env.base_url, ScanPolicy(**env.scan_policy), f"duplicated:{src.key}", actor="user")
+    set_definition(db, tc, d, env.base_url, ScanPolicy(**env.scan_policy), f"duplicated:{src.key}", actor=actor(db))
     db.commit()
     return tc
 

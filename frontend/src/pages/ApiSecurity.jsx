@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api.js'
+import { useMe } from '../Auth.jsx'
 import { Badge, Button, Card, Empty, ErrorBox, Field, inputCls } from '../ui.jsx'
 
 const PROFILES = {
@@ -11,6 +12,7 @@ const PROFILES = {
 
 /** API inventory + security policy + API/security test generation for one environment (§11, §12). */
 export default function ApiSecurityCard({ projectId, envs, scans }) {
+  const admin = useMe().can('admin')  // scan policy is admin-only
   const qc = useQueryClient()
   const [envId, setEnvId] = useState('')
   const env = envs.find((e) => e.id === envId) || envs[0]
@@ -50,13 +52,13 @@ export default function ApiSecurityCard({ projectId, envs, scans }) {
       <div className="grid gap-4 md:grid-cols-3">
         <div className="space-y-2">
           <Field label="Security profile" hint={PROFILES[policy.security_profile || 'passive']}>
-            <select className={inputCls} value={policy.security_profile || 'passive'} disabled={savePolicy.isPending}
+            <select className={inputCls} value={policy.security_profile || 'passive'} disabled={!admin || savePolicy.isPending}
               onChange={(e) => savePolicy.mutate({ security_profile: e.target.value })}>
               {Object.keys(PROFILES).map((p) => <option key={p}>{p}</option>)}
             </select>
           </Field>
           <Field label="Rate limit (requests/second)" hint={`Budget: ${policy.max_requests ?? 200} requests per test run`}>
-            <input className={inputCls} type="number" min="0.1" max="50" step="0.1" defaultValue={policy.requests_per_second ?? 5}
+            <input className={inputCls} type="number" min="0.1" max="50" step="0.1" disabled={!admin} defaultValue={policy.requests_per_second ?? 5}
               onBlur={(e) => +e.target.value !== policy.requests_per_second && savePolicy.mutate({ requests_per_second: +e.target.value })} />
           </Field>
           <ErrorBox error={savePolicy.error} />

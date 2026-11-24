@@ -6,9 +6,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from app.auth import COOKIE, resolve
+from app.auth import router as auth_router
 from app.config import settings
-from app.db import engine
+from app.db import SessionLocal, engine
 from app.events import channel
+from app.models import Project
 from app.reports import router as reports_router
 from app.routes import router
 from app.routes_api import router as api_router
@@ -16,6 +19,7 @@ from app.routes_findings import router as findings_router
 
 app = FastAPI(title="Dragonfly", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
+app.include_router(auth_router)
 app.include_router(router)
 app.include_router(findings_router)
 app.include_router(reports_router)
@@ -24,9 +28,16 @@ app.include_router(api_router)
 
 @app.websocket("/api/v1/ws/projects/{project_id}")
 async def project_events(ws: WebSocket, project_id: uuid.UUID):
-    """Forwards the project's live events. shortcut: unauthenticated like the REST API until Phase 1."""
+    """Forwards the project's live events to signed-in members of the project's organization."""
     import redis.asyncio as aioredis
 
+    with SessionLocal() as db:
+        ctx = resolve(db, ws.cookies.get(COOKIE))
+        project = db.get(Project, project_id)
+        allowed = bool(ctx and project and project.organization_id == ctx.org_id)
+    if not allowed:
+        await ws.close(code=1008)  # policy violation; same result for "missing" and "forbidden"
+        return
     await ws.accept()
     client = aioredis.Redis.from_url(settings.redis_url)
     pubsub = client.pubsub()

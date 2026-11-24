@@ -1,4 +1,4 @@
-"""API inventory + API/security test generation (§11, §12). Same no-auth shortcut as routes.py."""
+"""API inventory + API/security test generation (§11, §12)."""
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,13 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import api_testing
+from app.auth import actor, authenticate
 from app.db import get_db
 from app.models import AuditLog, DiscoveredEndpoint, Environment, ScanRun
 from app.routes import get_or_404
 from app.schemas import EndpointOut, GenerateApiTestsIn, OpenApiImportIn
 from app.scope import ScopeError
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)])
 
 
 @router.post("/environments/{env_id}/openapi")
@@ -31,7 +32,7 @@ def import_openapi(env_id: uuid.UUID, body: OpenApiImportIn, db: Session = Depen
         raise HTTPException(422, str(e))
     except Exception as e:  # network errors fetching the spec
         raise HTTPException(502, f"could not fetch spec: {type(e).__name__}")
-    db.add(AuditLog(project_id=env.project_id, source="api", message=f"OpenAPI imported for {env.name}",
+    db.add(AuditLog(project_id=env.project_id, source="api", actor=actor(db), message=f"OpenAPI imported for {env.name}",
                     metadata_json={**result, "url": body.url}))
     db.commit()
     return result

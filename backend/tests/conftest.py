@@ -10,7 +10,9 @@ import pytest
 
 _tmp = tempfile.mkdtemp(prefix="dragonfly-")
 os.environ.update(DATABASE_URL=f"sqlite:///{_tmp}/test.db", CELERY_EAGER="1", ARTIFACT_DIR=f"{_tmp}/artifacts",
-                  ANTHROPIC_API_KEY="")
+                  ANTHROPIC_API_KEY="", DRAGONFLY_SECRET_KEY="dGVzdC1rZXktZm9yLWRyYWdvbmZseS10ZXN0cy0zMmI=")
+OWNER = {"organization": "Acme QA", "email": "owner@dragonfly.test", "display_name": "Olive Owner",
+         "password": "owner-password-123"}
 
 from app import models  # noqa: F401  (registers tables)
 from app.db import Base, engine
@@ -24,7 +26,20 @@ def client():
 
     from app.main import app
 
-    return TestClient(app)
+    c = TestClient(app)
+    r = c.post("/api/v1/auth/register", json=OWNER)  # first-run setup: this client is the org owner
+    assert r.status_code == 201, r.text
+    return c
+
+
+@pytest.fixture
+def new_client():
+    """A fresh, signed-out client (separate cookie jar)."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    return lambda: TestClient(app)
 
 
 @pytest.fixture(scope="session")

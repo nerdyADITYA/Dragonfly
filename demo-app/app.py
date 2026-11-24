@@ -13,13 +13,17 @@ KNOWN DEFECTS (keep this list in sync; Dragonfly should find these):
 Safety bait: /users/{id}/delete is a GET link and the footer links to an external site.
 Dragonfly must not follow either.
 
+Sign-in area: /account and /api/me require the session cookie set by POST /login
+(demo@acme.test / demo-password). Used to demonstrate authenticated scanning.
+
 Set DEMO_FIXED=1 to fix D1–D3 (used later to demo retesting).
 """
 import os
 from datetime import date
 from html import escape
 
-from fastapi import FastAPI, Form, Query
+from fastapi import Depends, FastAPI, Form, Query
+from fastapi.security import APIKeyCookie
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 FIXED = os.getenv("DEMO_FIXED") == "1"
@@ -29,13 +33,14 @@ USERS = [{"id": i, "name": n, "email": f"{n.lower()}@acme.test"} for i, n in enu
     ["Alice", "Bob", "Carol", "Dave", "Erin", "Frank", "Grace", "Heidi", "Ivan", "Judy", "Mallory", "Niaj"], 1)]
 PAGE_SIZE = 5
 DEMO_EMAIL, DEMO_PASSWORD = "demo@acme.test", "demo-password"  # demo-only credentials
+session_cookie = APIKeyCookie(name="session", auto_error=False)  # declares cookie auth in the OpenAPI spec
 
 
 def page(title: str, body: str, script: str = "") -> HTMLResponse:
     return HTMLResponse(f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{escape(title)} · Acme Tasks</title>
 <style>body{{font-family:system-ui;margin:2rem;max-width:760px}}nav a{{margin-right:1rem}}.error{{color:#b00}}table{{border-collapse:collapse}}td,th{{border:1px solid #ccc;padding:.3rem .6rem}}</style>
 </head><body><nav aria-label="Main"><a href="/">Home</a><a href="/login">Login</a><a href="/dashboard">Dashboard</a>
-<a href="/users">Users</a><a href="/users/new">Add user</a><a href="/search">Search</a></nav>
+<a href="/users">Users</a><a href="/users/new">Add user</a><a href="/search">Search</a><a href="/account">My account</a></nav>
 <main><h1>{escape(title)}</h1>{body}</main>
 <footer><a href="https://example.com/partner">Our partner site</a></footer>{script}</body></html>""")
 
@@ -141,3 +146,27 @@ def api_user(user_id: int):
         if u["id"] == user_id:
             return u
     return JSONResponse({"error": "not found"}, status_code=404 if FIXED else 200)  # D5
+
+
+@app.get("/account", response_class=HTMLResponse)
+def account(session: str | None = Depends(session_cookie)):
+    if session != "demo":
+        return RedirectResponse("/login", status_code=303)
+    return page("My account", f"<p>Signed in as <strong>{DEMO_EMAIL}</strong>.</p>"
+                              '<p><a href="/account/settings">Account settings</a></p>')
+
+
+@app.get("/account/settings", response_class=HTMLResponse)
+def account_settings(session: str | None = Depends(session_cookie)):
+    if session != "demo":
+        return RedirectResponse("/login", status_code=303)
+    return page("Account settings", '<form method="post" action="/account/settings" aria-label="Profile">'
+                '<label for="dn">Display name</label> <input id="dn" name="display_name" value="Demo">'
+                '<button type="submit">Save profile</button></form>')
+
+
+@app.get("/api/me")
+def api_me(session: str | None = Depends(session_cookie)):
+    if session != "demo":
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    return {"email": DEMO_EMAIL, "name": "Demo User", "role": "member"}
