@@ -24,6 +24,27 @@ deterministically with Playwright, and captures evidence. AI plans; tools execut
 - **Live updates**: worker → Redis pub/sub → `/api/v1/ws/projects/{id}` WebSocket. Pages refresh as
   pages are found and tests finish; polling is only a fallback.
 
+## API & security testing (Phases 7–8)
+
+On the project page, **API & security testing** lets you pick a security profile, import an OpenAPI spec
+(URL inside the scope, or pasted JSON; XHR/fetch calls seen during discovery are added too), and generate:
+
+- **API tests** for safe GET endpoints: 2xx + documented JSON schema, `404` for a non-existent id,
+  `4xx` for a malformed id. State-changing and destructive-looking endpoints are skipped, with the reason.
+- **Passive security checks**: security headers, cookie flags, error-page leaks (stack traces, file
+  paths, SQL), CORS origin reflection, secret-looking fields in JSON responses.
+- **Standard profile** adds low-volume probes: one failed sign-in with a fake account per login form,
+  checking that the error does not reveal internals.
+
+They run without a browser through an HTTP runner that re-checks scope/DNS on every request, honours a
+rate limit and a per-run request budget, never follows redirects, and stores sanitized evidence
+(credentials, cookie values and query strings redacted; secret-looking JSON values masked).
+Failures become findings like any other test, so tickets and retests work the same way.
+
+**Detection on the demo app** (rule-based generators, no AI key): 5 of 8 seeded defects —
+D1 required field, D5 wrong API status, D6 JavaScript error, D7 login error disclosure, D8 missing
+security headers. D2–D4 (pagination, case-insensitive search, impossible dates) need the AI planner.
+
 ## Demo storyline (§65)
 
 1. Discover the demo app, generate tests, approve and run them → `Add user: empty required fields…` fails.
@@ -102,6 +123,8 @@ destructive `Delete` link or the external partner link, and that unapproved test
 - Discovery is unauthenticated and links-only.
 - Artifacts are on a local volume (MinIO/S3 + signed URLs in Phase 6).
 - Tests created before version history existed have no recorded versions.
+- OpenAPI import accepts JSON only (no YAML); APIs that need authentication are not tested yet.
+- The X-Frame-Options check does not yet accept CSP `frame-ancestors` as an equivalent.
 - With *private network* enabled, an IP-literal target inside the Docker network is not blocked by name.
 - DNS results are cached per worker process (no rebinding protection yet).
 - Tickets are internal only; GitHub Issues sync is not built yet. Assignees are a per-project list, not user accounts.

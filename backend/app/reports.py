@@ -82,6 +82,7 @@ def dashboard(project_id: uuid.UUID | None = None, days: int = 14, db: Session =
         "findings": {"total": len(findings), "open": len(open_f),
                      "open_by_severity": {s: sum(f.severity == s for f in open_f)
                                           for s in ("critical", "high", "medium", "low", "info")},
+                     "open_by_category": dict(Counter(f.category for f in open_f)),
                      "reopened": sum(f.status == "reopened" for f in findings),
                      "verified": sum(f.status == "verified" for f in findings)},
         "trend": [{"date": d.isoformat(), "passed": c["passed"], "failed": c["failed"], "other": c["other"]}
@@ -121,6 +122,33 @@ def _img(db: Session, execution_id) -> str:
     except (OSError, ValueError):
         data = None
     return f'<img alt="Screenshot at failure" src="data:image/png;base64,{base64.b64encode(data).decode()}">' if data else ""
+
+
+def _http(db: Session, execution_id) -> str:
+    step = db.scalars(select(ExecutionStep).where(ExecutionStep.test_execution_id == execution_id,
+                                                  ExecutionStep.status == "failed")).first()
+    ev = step.result_json if step else None
+    if not ev:
+        return ""
+    req, resp = ev["request"], ev["response"]
+    headers = "\n".join(f"{k}: {v}" for k, v in resp["headers"].items())
+    return (f"<p><b>HTTP evidence</b> (sanitized)</p><pre>{escape(req['method'])} {escape(req['url'])}\n\n"
+            f"HTTP {resp['status']}\n{escape(headers)}\n\n{escape(resp['body_excerpt'][:800])}</pre>")
+
+
+def _security_section(tests, latest, policy) -> list[str]:
+    sec = [t for t in tests if t.category == "security"]
+    profile = policy.get("security_profile", "passive")
+    if not sec:
+        return [(f"<h2>Security checks</h2><p class=muted>None run for this scan (security profile: {escape(profile)}). "
+                "Generate API &amp; security tests to add them.</p>")]
+    return [f"<h2>Security checks ({len(sec)}, profile: {escape(profile)})</h2>",
+            ("<p class=muted>Passive checks read responses only; the standard profile adds low-volume probes such as "
+            "one failed sign-in. No exploitation is attempted.</p>"),
+            "<table><tr><th>Check</th><th>Review</th><th>Latest result</th></tr>",
+            *[f"<tr><td>{escape(t.title)}</td><td>{_b(t.status)}</td>"
+              f"<td>{_b(latest[t.id].status) if t.id in latest else '<span class=muted>not run</span>'}</td></tr>"
+              for t in sec], "</table>"]
 
 
 def build_scan_report(db: Session, scan: ScanRun) -> str:
@@ -169,7 +197,7 @@ def build_scan_report(db: Session, scan: ScanRun) -> str:
          *[f"<tr><td>{escape(t.key)}</td><td>{escape(t.title)}</td><td>{escape(t.category)}</td><td>{_b(t.status)}</td>"
            f"<td>{_b(latest[t.id].status) if t.id in latest else '<span class=muted>not run</span>'}</td></tr>"
            for t in tests], "</table>",
-         "<h2>Security checks</h2><p class=muted>Not performed: security scanning is not part of this version.</p>",
+         *_security_section(tests, latest, policy),
          f"<h2>Findings ({len(findings)})</h2>"]
     if not findings:
         h.append("<p class=muted>No findings.</p>")
@@ -180,7 +208,7 @@ def build_scan_report(db: Session, scan: ScanRun) -> str:
               "<p><b>Steps to reproduce</b></p><ol>",
               *[f"<li>{escape(x)}</li>" for x in f.reproduction_steps_json], "</ol>",
               f"<p><b>Expected:</b> {escape(f.expected_result)}<br><b>Actual:</b> {escape(f.actual_result)}</p>",
-              _img(db, f.test_execution_id)]
+              _img(db, f.test_execution_id) or _http(db, f.test_execution_id)]
         if a.get("summary"):
             h.append(f'<p class=hyp><b>AI analysis (hypothesis, not a proven root cause):</b> {escape(a["summary"])}'
                      + (f"<br>Likely cause: {escape(a['likely_cause'])}" if a.get("likely_cause") else "") + "</p>")

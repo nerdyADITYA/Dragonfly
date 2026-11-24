@@ -5,7 +5,7 @@ Auth/orgs, findings, tickets and retests arrive in later phases.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base, JSONType
@@ -116,6 +116,27 @@ class ApplicationEdge(Base):
     trigger: Mapped[str] = mapped_column(String(500), default="")
 
 
+class DiscoveredEndpoint(Base):
+    """API endpoint inventory (§11.2), deduplicated per environment + method + path template."""
+
+    __tablename__ = "discovered_endpoints"
+    __table_args__ = (UniqueConstraint("environment_id", "method", "path", name="uq_endpoint_env_method_path"),)
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = fk("projects.id")
+    environment_id: Mapped[uuid.UUID] = fk("environments.id")
+    method: Mapped[str] = mapped_column(String(10))
+    path: Mapped[str] = mapped_column(String(1000))  # template, e.g. /api/users/{user_id}
+    operation_id: Mapped[str] = mapped_column(String(200), default="")
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    parameters_json: Mapped[list] = mapped_column(JSONType, default=list)
+    has_request_body: Mapped[bool] = mapped_column(Boolean, default=False)
+    response_content_type: Mapped[str] = mapped_column(String(100), default="")
+    response_schema_json: Mapped[dict | None] = mapped_column(JSONType)  # 2xx schema with components for $ref
+    source: Mapped[str] = mapped_column(String(20))  # openapi | network
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class TestCase(Timestamps, Base):
     __tablename__ = "test_cases"
     __test__ = False  # not a pytest class
@@ -203,6 +224,7 @@ class ExecutionStep(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text)
     screenshot_artifact_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    result_json: Mapped[dict | None] = mapped_column(JSONType)  # HTTP steps: sanitized request/response evidence
 
 
 class Artifact(Base):

@@ -11,6 +11,7 @@ export const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info']
 export function FindingsCard({ projectId }) {
   const [params] = useSearchParams()  // dashboard tiles deep-link here with ?severity= / ?status=
   const [filter, setFilter] = useState({ status: params.get('status') || '', severity: params.get('severity') || '',
+    category: params.get('category') || '',
     open_only: params.get('open_only') !== 'false' })
   useEffect(() => { if (location.hash === '#findings') document.getElementById('findings')?.scrollIntoView() }, [])
   const qs = new URLSearchParams(Object.entries(filter).filter(([, v]) => v)).toString()
@@ -24,6 +25,9 @@ export function FindingsCard({ projectId }) {
         <select aria-label="Status filter" className={sel} value={filter.status} onChange={(e) => setFilter({ ...filter, status: e.target.value })}>
           <option value="">any status</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>
+        <select aria-label="Category filter" className={sel} value={filter.category} onChange={(e) => setFilter({ ...filter, category: e.target.value })}>
+          <option value="">any category</option>{['functional', 'validation', 'edge_case', 'api', 'security'].map((c) => <option key={c}>{c}</option>)}
+        </select>
         <select aria-label="Severity filter" className={sel} value={filter.severity} onChange={(e) => setFilter({ ...filter, severity: e.target.value })}>
           <option value="">any severity</option>{SEVERITIES.map((s) => <option key={s}>{s}</option>)}
         </select>
@@ -35,7 +39,7 @@ export function FindingsCard({ projectId }) {
         {findings.data?.map((f) => (
           <li key={f.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
             <Link className="flex-1 font-medium text-indigo-700 hover:underline" to={`/findings/${f.id}`}>{f.title}</Link>
-            <Badge>{f.severity}</Badge><Badge>{f.confidence}</Badge><Badge>{f.status}</Badge>
+            <Badge>{f.category}</Badge><Badge>{f.severity}</Badge><Badge>{f.confidence}</Badge><Badge>{f.status}</Badge>
             <span className="text-xs text-slate-500">×{f.occurrences} · last {fmt(f.last_detected_at)}</span>
           </li>
         ))}

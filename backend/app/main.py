@@ -11,6 +11,7 @@ from app.db import engine
 from app.events import channel
 from app.reports import router as reports_router
 from app.routes import router
+from app.routes_api import router as api_router
 from app.routes_findings import router as findings_router
 
 app = FastAPI(title="Dragonfly", version="0.1.0")
@@ -18,6 +19,7 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_me
 app.include_router(router)
 app.include_router(findings_router)
 app.include_router(reports_router)
+app.include_router(api_router)
 
 
 @app.websocket("/api/v1/ws/projects/{project_id}")

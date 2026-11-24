@@ -50,6 +50,13 @@ def redact_action(a: dict) -> dict:
     t = a.get("target") or {}
     if a.get("type") == "fill" and SECRET_RE.search(" ".join(str(v) for v in t.values() if v)):
         return {**a, "value": "•••••• (redacted)"}
+    if a.get("type") == "api_request" and a.get("body"):
+        try:
+            body = json.loads(a["body"])
+        except ValueError:
+            return {**a, "body": "(unparseable body redacted)"}
+        if isinstance(body, dict):
+            return {**a, "body": json.dumps({k: "•••" if SECRET_RE.search(k) else v for k, v in body.items()})}
     return a
 
 
@@ -85,6 +92,24 @@ def describe(a: dict) -> str:
             return f'Expect {t} to have value "{a.get("value")}"'
         case "assert_count":
             return f"Expect {a.get('count')} element(s) matching {t}"
+        case "assert_no_page_errors":
+            return "Expect no uncaught JavaScript errors on the page"
+        case "api_request":
+            extra = " with headers " + a["headers"] if a.get("headers") else ""
+            body = f" with a {a.get('value') or 'json'} body" if a.get("body") else ""
+            return f"Send {a.get('method')} {a.get('url')}{extra}{body}"
+        case "assert_status":
+            return f"Expect HTTP status {a.get('value')}"
+        case "assert_json_schema":
+            return "Expect the response body to match the documented JSON schema"
+        case "assert_header":
+            return f'Expect response header "{a.get("key")}"' + (f' matching /{a["value"]}/' if a.get("value") else "")
+        case "assert_header_not":
+            return f'Expect response header "{a.get("key")}" not to match /{a.get("value")}/'
+        case "assert_body_not":
+            return "Expect the response not to reveal sensitive content (pattern check)"
+        case "assert_cookies_secure":
+            return "Expect cookies to be HttpOnly and SameSite (and Secure on HTTPS)"
     return f"{a['type'].replace('_', ' ').capitalize()} {t}".strip()
 
 

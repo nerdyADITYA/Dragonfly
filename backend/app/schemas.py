@@ -17,6 +17,10 @@ class ScanPolicy(BaseModel):
     step_timeout_ms: int = Field(10_000, ge=1000, le=60_000)
     test_timeout_seconds: int = Field(60, ge=5, le=600)
     destructive_actions_allowed: bool = False
+    security_profile: Literal["off", "passive", "standard"] = Field(
+        "passive", description="passive: read-only header/config checks; standard: adds low-volume probes such as a failed login")
+    requests_per_second: float = Field(5, gt=0, le=50, description="Rate limit for HTTP/API/security requests")
+    max_requests: int = Field(200, ge=1, le=10_000, description="Request budget per test run (HTTP tests)")
     viewport_width: int = 1280
     viewport_height: int = 800
 
@@ -87,6 +91,10 @@ class EnvironmentOut(ORM):
 ActionType = Literal[
     "navigate", "click", "fill", "select", "check", "uncheck", "press", "hover", "wait_for", "screenshot",
     "assert_text", "assert_visible", "assert_hidden", "assert_url", "assert_title", "assert_value", "assert_count",
+    "assert_no_page_errors",
+    # HTTP / API / security (no browser): a test whose first step is api_request uses only these.
+    "api_request", "assert_status", "assert_json_schema", "assert_header", "assert_header_not", "assert_body_not",
+    "assert_cookies_secure",
 ]
 
 
@@ -110,6 +118,10 @@ class Action(BaseModel):
     key: str | None = Field(None, description="press: key name, e.g. Enter")
     text: str | None = Field(None, description="assert_text: expected text (substring)")
     count: int | None = Field(None, description="assert_count: expected number of matches")
+    method: str | None = Field(None, description="api_request: HTTP method")
+    headers: str | None = Field(None, description="api_request: extra request headers as a JSON object string")
+    body: str | None = Field(None, description="api_request: body as a JSON string; `value` = json|form selects the encoding")
+    json_schema: str | None = Field(None, description="assert_json_schema: JSON Schema as a JSON string")
     description: str = Field("", description="Human-readable step description")
 
 
@@ -118,7 +130,7 @@ class TestCaseDef(BaseModel):
     key: str = Field(description="Short unique ID like LOGIN-FUNC-001")
     title: str
     description: str = ""
-    category: Literal["functional", "validation", "edge_case", "regression", "accessibility"]
+    category: Literal["functional", "validation", "edge_case", "regression", "accessibility", "api", "security"]
     priority: Literal["P0", "P1", "P2", "P3"]
     risk: Literal["low", "medium", "high"] = "medium"
     preconditions: list[str] = Field(default_factory=list)
@@ -227,6 +239,7 @@ class TestRunIn(BaseModel):
 
 
 class StepOut(ORM):
+    result_json: dict | None = None
     step_number: int
     action_type: str
     action_definition_json: dict
@@ -358,6 +371,7 @@ class FindingDetailOut(FindingOut):
     duplicate_candidates: list[FindingOut]
     original_screenshot_id: uuid.UUID | None
     latest_screenshot_id: uuid.UUID | None
+    http_evidence: dict | None = None  # HTTP tests: sanitized request/response of the failing step
 
 
 class FindingPatch(BaseModel):
@@ -400,3 +414,28 @@ class TestCaseVersionOut(ORM):
     source: str
     created_by: str
     created_at: datetime
+
+
+# ---------- API inventory (Phase 7) ----------
+
+
+class OpenApiImportIn(BaseModel):
+    url: str | None = Field(None, description="Spec URL; must be inside the environment's scope")
+    spec: dict | None = Field(None, description="Spec JSON pasted/uploaded directly")
+
+
+class EndpointOut(ORM):
+    id: uuid.UUID
+    method: str
+    path: str
+    operation_id: str
+    summary: str
+    parameters_json: list
+    has_request_body: bool
+    response_content_type: str
+    source: str
+    last_seen_at: datetime
+
+
+class GenerateApiTestsIn(BaseModel):
+    scan_run_id: uuid.UUID

@@ -62,12 +62,20 @@ def _failed_shot(db: Session, execution_id) -> uuid.UUID | None:
     return art.id if art else None
 
 
+def _failed_http(db: Session, execution_id) -> dict | None:
+    step = db.scalars(select(ExecutionStep).where(ExecutionStep.test_execution_id == execution_id,
+                                                  ExecutionStep.status == "failed")).first()
+    return step.result_json if step else None
+
+
 # ---------------- findings ----------------
 
 @router.get("/projects/{project_id}/findings", response_model=list[FindingOut])
 def list_findings(project_id: uuid.UUID, status: str | None = None, severity: str | None = None,
-                  open_only: bool = False, db: Session = Depends(get_db)):
+                  category: str | None = None, open_only: bool = False, db: Session = Depends(get_db)):
     q = select(Finding).where(Finding.project_id == project_id)
+    if category:
+        q = q.where(Finding.category == category)
     if status:
         q = q.where(Finding.status == status)
     if severity:
@@ -91,6 +99,7 @@ def get_finding(finding_id: uuid.UUID, db: Session = Depends(get_db)):
         duplicate_candidates=fx.duplicate_candidates(db, f),
         original_screenshot_id=_failed_shot(db, f.test_execution_id),
         latest_screenshot_id=_failed_shot(db, f.last_execution_id),
+        http_evidence=_failed_http(db, f.last_execution_id),
     )
 
 

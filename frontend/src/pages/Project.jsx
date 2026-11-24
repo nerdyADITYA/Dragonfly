@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ACTIVE, api, useLiveEvents } from '../api.js'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Loading, fmt, inputCls } from '../ui.jsx'
 import { DevelopersCard, FindingsCard, TicketsCard } from './Findings.jsx'
+import ApiSecurityCard from './ApiSecurity.jsx'
 import TestCases from './TestCases.jsx'
 
 function EnvironmentForm({ projectId }) {
@@ -157,6 +158,8 @@ export default function Project() {
         <TicketsCard projectId={id} />
         <DevelopersCard projectId={id} />
       </div>
+
+      <ApiSecurityCard projectId={id} envs={envs.data || []} scans={scans.data || []} />
 
       <TestCases projectId={id} envs={envs.data || []} scans={scans.data || []} />
     </>

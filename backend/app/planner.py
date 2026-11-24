@@ -31,6 +31,9 @@ Rules:
   only as a last resort. Use only names/labels that appear in the discovery data.
 - Never click delete/purchase/send/transfer/publish/logout-style controls. Set side_effect to
   "writes_data" for tests that submit forms, "destructive" only if unavoidable (it will be blocked).
+- End page-level tests with `assert_no_page_errors` so uncaught JavaScript errors fail the test.
+- These are browser tests: do not use api_request or the HTTP assertions (API and security tests are
+  generated separately from the API inventory).
 - Cover: page loads, navigation, form validation (required fields, invalid formats, boundary values),
   search behaviour (including case-insensitivity), pagination, and edge cases (long input, unicode, whitespace).
 - Do not invent credentials. If a test needs a login, list it under data_requirements.
@@ -70,6 +73,7 @@ def rule_based_plan(summary: dict) -> list[TestCaseDef]:
         heading = next((e["name"] for e in p["elements"] if e["role"] == "heading"), None)
         if heading:
             steps.append(Action(type="assert_visible", target=Target(role="heading", name=heading)))
+        steps.append(Action(type="assert_no_page_errors", description="No uncaught JavaScript errors"))
         tests.append(TestCaseDef(
             key=f"{area}-FUNC-{n:03d}", title=f"{p['title'] or path} page loads", category="functional",
             priority="P1", risk="low", target_url=p["url"], steps=steps,

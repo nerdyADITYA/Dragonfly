@@ -18,6 +18,14 @@ export function describeStep(a) {
     assert_hidden: `Check ${t} is hidden`, assert_url: `Check URL contains “${a.value}”`,
     assert_title: `Check title contains “${a.value}”`, assert_value: `Check ${t} has value “${a.value}”`,
     assert_count: `Check there are ${a.count} of ${t}`,
+    assert_no_page_errors: 'Check there are no uncaught JavaScript errors',
+    api_request: `Send ${a.method} ${a.url}${a.headers ? ` with headers ${a.headers}` : ''}${a.body ? ` and a ${a.value || 'json'} body` : ''}`,
+    assert_status: `Check HTTP status is ${a.value}`,
+    assert_json_schema: 'Check the body matches the documented schema',
+    assert_header: `Check header “${a.key}” is present${a.value ? ` and matches /${a.value}/` : ''}`,
+    assert_header_not: `Check header “${a.key}” does not match /${a.value}/`,
+    assert_body_not: 'Check the response does not reveal sensitive content',
+    assert_cookies_secure: 'Check cookies are HttpOnly and SameSite (Secure on HTTPS)',
   }
   return say[a.type] || a.type
 }

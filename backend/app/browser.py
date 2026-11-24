@@ -14,6 +14,7 @@ class Events:
         self.page_errors: list[str] = []
         self.failed_requests: list[dict] = []
         self.blocked_requests: list[dict] = []
+        self.api_calls: set[tuple[str, str]] = set()  # (method, url) of XHR/fetch requests
 
     def as_dict(self):
         return {"console_errors": self.console_errors[:50], "page_errors": self.page_errors[:50],
@@ -57,6 +58,7 @@ def isolated_page(base_url: str, policy: ScanPolicy, record_trace: bool = False)
             page.set_default_timeout(policy.step_timeout_ms)
             page.on("console", lambda m: m.type == "error" and events.console_errors.append(m.text[:500]))
             page.on("pageerror", lambda e: events.page_errors.append(str(e)[:500]))
+            page.on("request", lambda r: r.resource_type in ("xhr", "fetch") and events.api_calls.add((r.method, r.url)))
             page.on("response", lambda r: r.status >= 400 and events.failed_requests.append(
                 {"url": _redact_url(r.url), "status": r.status, "method": r.request.method}))
             page.on("requestfailed", lambda r: "ERR_BLOCKED_BY_CLIENT" not in (r.failure or "") and

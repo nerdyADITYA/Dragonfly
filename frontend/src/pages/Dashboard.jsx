@@ -71,7 +71,8 @@ export default function Dashboard() {
             <Tile label="Open findings" value={d.findings.open} hint={`${d.findings.total} total`} to={findingsLink('open_only=true')} />
             <Tile label="Critical + high open" value={d.findings.open_by_severity.critical + d.findings.open_by_severity.high} to={findingsLink('severity=high')} />
             <Tile label="Projects" value={d.projects} to="/projects" />
-            <Tile label="Discovery scans" value={d.scans} />
+            <Tile label="Open security findings" value={d.findings.open_by_category.security ?? 0}
+              hint={`${d.findings.open_by_category.api ?? 0} open API findings`} to={findingsLink('category=security')} />
             <Tile label="Reopened (regressions)" value={d.findings.reopened} to={findingsLink('status=reopened')} />
             <Tile label="Verified fixes" value={d.findings.verified} to={findingsLink('status=verified&open_only=false')} />
           </div>

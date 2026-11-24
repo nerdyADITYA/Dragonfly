@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ACTIVE, api, artifactUrl, useLiveEvents } from '../api.js'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Loading, fmt, inputCls } from '../ui.jsx'
+import { HttpExchange } from './Execution.jsx'
 import { SEVERITIES, STATUSES } from './Findings.jsx'
 
 const MANUAL = STATUSES.filter((s) => !['verified', 'duplicate'].includes(s))
@@ -198,6 +199,7 @@ export default function Finding() {
           <Card title="Evidence">
             <div className="grid gap-3 md:grid-cols-2">
               <Shot id={f.original_screenshot_id} label="At first detection" />
+              {f.http_evidence && <div className="md:col-span-2"><p className="text-xs font-medium text-slate-600">HTTP response at failure (sanitized)</p><HttpExchange ev={f.http_evidence} /></div>}
               {f.latest_screenshot_id !== f.original_screenshot_id && <Shot id={f.latest_screenshot_id} label="Most recent failure" />}
             </div>
             <p className="mt-2 text-sm">

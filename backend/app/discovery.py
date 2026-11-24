@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from sqlalchemy.orm import Session
 
 from app import storage
+from app.api_testing import record_network_calls
 from app.browser import isolated_page, screenshot
 from app.events import publish
 from app.models import (
@@ -24,7 +25,7 @@ from app.models import (
     ScanRun,
 )
 from app.schemas import ScanPolicy
-from app.scope import DESTRUCTIVE_RE, ScopeError, check_url
+from app.scope import DESTRUCTIVE_RE, ScopeError, check_url, in_scope
 
 EXTRACT_JS = r"""
 () => {
@@ -205,8 +206,10 @@ def run_discovery(db: Session, scan_id) -> None:
                     if route_pattern(target) not in seen:
                         queue.append((target, depth + 1, dp, el["name"][:500]))
             events_summary = events.as_dict()
+            api_calls = {c for c in events.api_calls if in_scope(c[1], base, policy)}
 
         scan.status = "cancelled" if stats["stopped_reason"] == "cancelled" else "completed"
+        stats["api_endpoints_seen"] = record_network_calls(db, env, api_calls)
         scan.summary_json = {**stats, "skipped": skipped[:100], "browser_events": events_summary,
                              "limitations": ["Links only: buttons and forms were not exercised during discovery.",
                                              "Unauthenticated crawl (auth profiles arrive in a later phase)."]}
